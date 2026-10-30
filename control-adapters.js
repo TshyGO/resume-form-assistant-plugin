@@ -214,8 +214,9 @@
       }
       // #301 写不进的普通文本框（大易 hotjob 的学校、专业，51job）：可能是只认从建议里选的联想框，框上没有任何下拉标记。
       // 保持焦点、带按键再打一次字，等贴着它新冒出来的建议，只点和要填的字相同的一项；点了或者没有建议框，都失焦再核对。
+      // 只在框里换回了写之前的字时再试：这类框没选就还原。改成别的字的（页面改了格式）不再等建议，免得每个框白等。
       if (!verdict.ok && !shown && verdict.reason === 'value_not_committed' && ctx.kind === 'text' && !deps.prefersSequential(ctx.el)
-        && scope.ResumeProCustomControls?.suggest) {
+        && String(ctx.el.value ?? '') === previous && scope.ResumeProCustomControls?.suggest) {
         const picked = await scope.ResumeProCustomControls.suggest(ctx, String(value ?? ''), host);
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);

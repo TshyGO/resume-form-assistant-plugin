@@ -7,7 +7,7 @@
     inputs: "input:not([type=hidden]), textarea, select",
     custom: "[role=combobox], [role=listbox], [aria-haspopup=listbox], [contenteditable]:not([contenteditable=false]), "
       + ".ant-select, .ant-cascader, .el-select, .el-cascader, .arco-select, .arco-cascader, "
-      + ".ivu-select, .ivu-cascader, .semi-select, .layui-form-select, .yui-ac-input",
+      + ".ivu-select, .ivu-cascader, .semi-select, .layui-form-select",
     labelled: "[aria-label], [title]",
     locked: "input[readonly]:not([type=hidden]), input[disabled]:not([type=hidden]), textarea[readonly], textarea[disabled], select[disabled]",
     all: "*"

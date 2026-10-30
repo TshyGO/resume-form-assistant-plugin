@@ -49,8 +49,8 @@ function scanned(doc, label) {
 }
 
 // 51job 简历页的 el-autocomplete（Element UI 2）：聚焦时没有建议，打字后防抖再异步取建议；只有点了建议才写进表单的值，
-// 失焦时框里换回表单的值（没选就还原）。建议框按 Tab、点页面别处收起。
-function job51({ schools = ["北京大学", "北京大学医学部", "北京交通大学"], debounce = 20, fetchMs = 30, options } = {}) {
+// 失焦时框里换回表单的值（没选就还原）。建议框按 Tab、点页面别处收起。hot：聚焦时给的热门列表。
+function job51({ schools = ["北京大学", "北京大学医学部", "北京交通大学"], hot = [], debounce = 20, fetchMs = 30, options } = {}) {
   const h = load(`<div class="el-form-item"><label class="el-form-item__label">学校</label><div class="el-form-item__content">
     <div class="el-autocomplete" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-owns="sugg-list">
       <div class="el-input"><input class="el-input__inner" type="text" autocomplete="off" role="textbox" aria-autocomplete="list" aria-controls="id"></div></div></div></div>
@@ -76,8 +76,8 @@ function job51({ schools = ["北京大学", "北京大学医学部", "北京交�
   let timer = null;
   const fetchFor = (query) => {
     clearTimeout(timer);
-    const key = (text) => text.toLowerCase().replace(/s+/g, "");
-    timer = setTimeout(() => setTimeout(() => { state.shown = query ? schools.filter((text) => key(text).includes(key(query))) : []; render(); }, fetchMs), debounce);
+    const key = (text) => text.toLowerCase().replace(/\s+/g, "");
+    timer = setTimeout(() => setTimeout(() => { state.shown = query ? schools.filter((text) => key(text).includes(key(query))) : hot.slice(); render(); }, fetchMs), debounce);
   };
   input.addEventListener("focus", () => { state.activated = true; fetchFor(input.value === state.model ? "" : input.value); });
   input.addEventListener("input", () => fetchFor(input.value));
@@ -111,6 +111,24 @@ test("51job autocomplete: a suggestion that only contains the typed name is not 
   assert.equal(h.state.model, "");
 });
 
+test("51job autocomplete showing a longer name on focus: it is not picked, and the typed name finds the same-named school", async () => {
+  // 评审复现：聚焦时的热门列表里只有「北京大学医学部」，原来会点它并算填上。
+  const h = job51({ hot: ["北京大学医学部", "清华大学"] });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.state.picks, ["北京大学"]);
+  assert.equal(h.state.model, "北京大学");
+});
+
+test("51job autocomplete with only longer names, on focus and after typing: nothing is picked and the field reads as not written", async () => {
+  const h = job51({ hot: ["北京大学医学部", "清华大学"], schools: ["北京大学医学部"] });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.reason, "value_not_committed");
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.state.model, "");
+});
+
 test("51job autocomplete: a Latin name differing only in case and spaces counts as the same suggestion", async () => {
   const h = job51({ schools: ["Peking University", "Peking University Health Science Center"] });
   const result = await h.api.operate(h.target, "peking  university");
@@ -130,7 +148,8 @@ test("51job autocomplete with real waits: a picked suggestion takes well under t
 
 // Element UI 2.15 的 el-autocomplete 本身（v-model 随打字更新，允许直接输入），照 autocomplete.vue 写：聚焦时取一次建议，
 // 取建议时先弹出只有加载图标的建议框；每次回来的结果都直接换上，不管先后；点建议后下一拍清空建议；Tab 收起，之后回来的结果不再显示。
-function elementStandard({ cities = ["广州市", "深圳市", "北京市", "上海市"], debounce = 30, fetchMs = 60, options } = {}) {
+// sync：fetch-suggestions 同步回调（Element 文档的写法），不出加载图标，空字时给全部建议。
+function elementStandard({ cities = ["广州市", "深圳市", "北京市", "上海市"], debounce = 30, fetchMs = 60, sync = false, options } = {}) {
   const h = load(`<div class="el-form-item"><label class="el-form-item__label">所在城市</label><div class="el-form-item__content">
     <div class="el-autocomplete" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-owns="city-list">
       <div class="el-input"><input class="el-input__inner" type="text" autocomplete="off" role="textbox" aria-autocomplete="list" aria-controls="id"></div></div></div></div>
@@ -152,6 +171,7 @@ function elementStandard({ cities = ["广州市", "深圳市", "北京市", "上
     }
   };
   const getData = (query) => {
+    if (sync) { state.suggestions = cities.filter((city) => !query || city.includes(query)); render(); return; }
     state.loading = true; render();
     setTimeout(() => { state.loading = false; state.suggestions = cities.filter((city) => !query || city.includes(query)); render(); }, fetchMs);
   };
@@ -172,6 +192,15 @@ test("standard Element autocomplete loading on focus: the same-named city is pic
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(h.popper.hidden, true, "the suggestions are closed");
   assert.equal(h.input.value, "深圳市");
+});
+
+test("standard Element autocomplete listing everything on focus: a longer name is not picked, the wanted name is typed", async () => {
+  // 评审复现（Element 文档的写法，空字时给全部建议）：要填「北京大学」，原来点了「北京大学医学部」并算填上。
+  const h = elementStandard({ cities: ["北京大学医学部", "北京交通大学", "清华大学"], sync: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.input.value, "北京大学");
 });
 
 test("standard Element autocomplete: a value with no suggestion is typed in without waiting the full 2 s for one", async () => {
@@ -288,10 +317,23 @@ test("a text box the page simply refuses gets one more try and keeps its old rea
   assert.equal(input.value, "");
 });
 
+test("a text box the page rewrites into another value is not tried again", async () => {
+  // 改了格式（不是还原）的框不是只认建议的联想框：不再打字、不等建议。
+  const h = load(`<div class="item"><label>编号</label><input></div>`);
+  const input = h.doc.querySelector("input");
+  let keys = 0;
+  input.addEventListener("keydown", () => { keys += 1; });
+  input.addEventListener("blur", () => { input.value = `${input.value.toUpperCase()}-X`; });
+  const result = await h.api.operate(scanned(h.doc, "编号"), "ab12");
+  assert.equal(result.reason, "value_not_committed");
+  assert.equal(keys, 0, "no second typing");
+});
+
 // SuccessFactors 的 juic.SFLegacyAutoComplete（改自 YUI 2 AutoComplete），照 2026-10 公开页的脚本写：
 // 聚焦、点击都不查询；keyup 后停一会儿按框里的字查询，最多列 10 条，先高亮第一条；点 li 才算选中，
-// 选中后框里换成这一项、建议框收起、aria-expanded=false。forceSelection：失焦时没选就清空。Tab、回车选中高亮的那一条。
-function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, value = "" } = {}) {
+// 选中后框里换成这一项、建议框收起、aria-expanded=false。force（forceSelection）：失焦时没选就清空，关掉就留着打的字。
+// Tab、回车选中高亮的那一条。aria：关掉就是原版 YUI 2，输入框上没有 ARIA。
+function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, force = true, value = "" } = {}) {
   const items = Array.from({ length: 10 }, (_, index) => `<li role="option" id="YUIListItem${index}" style="display:none"></li>`).join("");
   const h = load(`<div class="row"><label for="country">Country</label>
     <div class="yui-ac"><input id="country" type="text" class="yui-ac-input" ${aria ? 'role="combobox" aria-expanded="false"' : ""} autocomplete="off" value="${value}">
@@ -326,7 +368,7 @@ function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, value =
   });
   doc.querySelector(".yui-ac-container").addEventListener("click", (event) => { const li = event.target.closest("li"); if (li) select(li); });
   input.addEventListener("blur", () => {
-    if (!state.selected) input.value = "";
+    if (force && !state.selected) input.value = "";
     toggle(false); state.focused = false;
   });
   return { ...h, input, content, state, target: scanned(doc, "Country") };
@@ -368,12 +410,23 @@ test("SuccessFactors YUI autocomplete already showing the wanted value: it is pi
   assert.equal(h.input.value, "Germany");
 });
 
-test("a plain YUI 2 autocomplete without ARIA is scanned as a select and filled the same way", async () => {
+test("a plain YUI 2 autocomplete without ARIA that takes typed text stays a text box and keeps a value not in its list", async () => {
+  // 原版 YUI 2 默认 forceSelection=false，允许直接输入：和 main 一样按文本框写。
+  const h = yui({ aria: false, force: false });
+  assert.equal(h.target.controlKind, "text");
+  const result = await h.api.operate(h.target, "Munich");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.input.value, "Munich");
+  assert.deepEqual(h.state.picks, []);
+});
+
+test("a plain YUI 2 autocomplete without ARIA that forces a selection gets the same-named item on the second try", async () => {
   const h = yui({ aria: false });
-  assert.equal(h.target.controlKind, "custom-select");
+  assert.equal(h.target.controlKind, "text");
   const result = await h.api.operate(h.target, "Georgia");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.state.picks, ["Georgia"]);
+  assert.equal(h.input.value, "Georgia");
 });
 
 test("fill diagnostics name YUI and UI5 controls, and the report keeps them", () => {

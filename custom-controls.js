@@ -80,6 +80,7 @@
   const SUGGEST_MS = 1500;
   // #377 YUI 2 AutoComplete（SuccessFactors 的 juic.SFLegacyAutoComplete 改自它）：输入框带 yui-ac-input，
   // 外层 div.yui-ac 里的 .yui-ac-container 是建议框，正好一个才认。
+  // 原版 YUI 不带 ARIA，扫描时仍是文本框（默认允许直接输入）；开了 forceSelection 写不进的，由 suggest 从建议里选。
   function yuiBox(el) {
     if (el?.tagName !== 'INPUT' || !el.classList?.contains('yui-ac-input')) return null;
     const boxes = el.closest('.yui-ac')?.querySelectorAll('.yui-ac-container') || [];
@@ -104,7 +105,7 @@
   }
   // #269 联想输入框（智联学校名称、#299 51job 的 el-autocomplete）：本来就允许直接输入。
   // 只认组件类名写明是联想输入框的；单有 aria-autocomplete 的可能是只能从列表里选的下拉。
-  // 宿主（control-adapters.js）据此在建议里没有时按文本框填写，这里据此不选比要填的字短的建议。
+  // 宿主（control-adapters.js）据此在建议里没有时按文本框填写，这里据此只选同名的建议（见 sameOption）。
   const AUTOCOMPLETE_TOKEN = /(?:^|[-_])auto-?complete$/i;
   function acceptsFreeText(ctx) {
     const el = ctx.el, info = describe(ctx.entry);
@@ -355,18 +356,7 @@
         disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled') || Boolean(node.disabled) };
     });
   }
-  function match(list, value, helpers, freeText = false) {
-    // 联想输入框：比要填的字短的建议（要填「广州市天河区」，建议「广州市」）不选，交给宿主打入完整的字；
-    // 建议包含要填的字（要填「广州」，建议「广州市」）照常选。
-    // 去掉短的才选得出来的长建议（要填「广州市天河区」，建议「广州市」「广州市天河区体育西路」）可能是另一个值：照旧算拿不准。
-    if (freeText) {
-      const target = helpers.normalizeText(value);
-      const found = match(list.map(option => {
-        const text = helpers.normalizeText(option.text);
-        return text.length < target.length && target.includes(text) && helpers.normalizeText(option.value) !== target ? { ...option, disabled: true } : option;
-      }), value, helpers);
-      return found.option && !match(list, value, helpers).option ? { reason: 'ambiguous_option' } : found;
-    }
+  function match(list, value, helpers) {
     const index = helpers.findSelectOptionIndex(list, value);
     if (index < 0) {
       const possible = list.filter(option => !helpers.isPlaceholderOption(option)).filter(option => {
@@ -386,8 +376,8 @@
     }
     return { option: list[index] };
   }
-  // 插件自己打了字以后的建议（#301 联想框）：只认和要填的字相同的一项。逐字相同（去掉首尾空白）优先，
-  // 没有再看归一化后相同（大小写、空格、括号）；包含、被包含都不算。
+  // 联想框的建议（#301，网页先给出的和插件打字后的都是）：只认和要填的字相同的一项。逐字相同（去掉首尾空白）优先，
+  // 没有再看归一化后相同（大小写、空格、括号）；包含、被包含都不算（要填「北京大学」，不选「北京大学医学部」）。
   function sameOption(list, value, helpers) {
     const usable = list.filter(option => !option.disabled);
     const texts = option => [option.text, option.value, option.full].filter(text => text != null).map(String);
@@ -802,8 +792,8 @@
         .some(text => h.helpers.normalizeText(text) === h.helpers.normalizeText(desired[level])));
       // 联想框打字后的建议里没有同名的一项：停住一阵再算没有（见 FREE_TEXT_STEADY_MS），不用等满。
       const typedSettled = since => info.freeText && Date.now() - since >= FREE_TEXT_STEADY_MS && Date.now() - typedAt >= FREE_TEXT_SETTLE_MS;
-      // 联想框里插件自己打过字：只选同名的一项（见 sameOption）；网页自己先给出的建议照旧（包含要填的字的也选）。
-      const pick = items => info.freeText && searchDone ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers, info.freeText);
+      // 联想框只选同名的一项（见 sameOption）：网页先给出的建议里没有，就打字再找；打字后还没有，交宿主按文本框写。
+      const pick = items => info.freeText ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers);
       let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level),
         list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list) || typedSettled(steadySince)))
           || (eagerSearch && list.length === 0) || (typedAntd && noSuggestions(list)));
@@ -865,7 +855,7 @@
         if (next.reason) return { reason: next.reason === 'verification_timeout' ? 'cascade_timeout' : next.reason };
       }
     }
-    // 联想框（#299、#404 51job）不标出选中状态：点了建议、框里换成这一项、建议框也收起了就算选上。
+    // 联想框（#299、#404 51job）不标出选中状态：点了建议（只会是同名的一项，见 pick）、框里换成这一项、建议框也收起了就算选上。
     // 之后的核对只看框里的字：插件打字引起的建议晚到时建议框会再弹出来。失焦后留不留得住由宿主核对，页面没收下的失焦时会还原。
     const accepted = (picking = true) => {
       const values = selectedTexts(info);
