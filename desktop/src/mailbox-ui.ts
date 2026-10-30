@@ -196,8 +196,12 @@ export function mountMailboxes(
       const card = node("article", undefined, "mailbox-account");
       card.append(node("h3", account.email));
       card.append(node("p", `${account.paused ? "已暂停" : "检查已启用"} · 最近成功检查：${formattedTime(account.lastChecked)}`, "settings-caption"));
+      const needsConnectionRepair = (account.source === undefined || account.source === "imap")
+        && account.lastError === "Configuration" && !account.connection;
       if (account.lastError) {
-        const detail = account.failures === 0 && !account.paused
+        const detail = needsConnectionRepair
+          ? "本机邮箱连接配置无法读取或已失效，已暂停检查。请先点击“修改连接 / 更新凭据”，重新测试并保存成功后再检查；也可以断开并重新连接。"
+          : account.failures === 0 && !account.paused
           ? "部分文件夹或邮件未完成，其他邮件已继续扫描；程序会稍后重试。"
           : `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused
             ? account.failures > 0 ? " 连续失败已自动暂停，处理后恢复检查。" : " 已暂停检查，处理后可恢复检查。"
@@ -212,10 +216,10 @@ export function mountMailboxes(
           if (account.connection) { fillConnection(account.connection, true); retainConfiguration = true; }
           updateServerLabel();
           configuration.open = true;
-          showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
+          showProgress("edited", needsConnectionRepair ? "原连接配置无法读取，请核对后重新填写" : "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
           if (!showEndpointReview()) secret.focus();
         }));
-        controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
+        if (!needsConnectionRepair) controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
           await invoke("mailbox_pause", { id: account.id, paused: !account.paused });
           if (account.paused) await checkNow("settings");
           else say("settings", "已暂停此邮箱。");

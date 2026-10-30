@@ -1528,3 +1528,59 @@ fn upgrading_a_populated_database_builds_candidate_health_once_and_preserves_sta
     db.pending_with_issues("archive", 100).unwrap();
     assert_eq!(db.decoded_candidate_count() - before, 1);
 }
+
+#[test]
+fn candidate_refresh_waits_for_a_concurrent_scan_commit_before_reading_its_snapshot() {
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use std::time::Duration;
+    let (dir, mut db) = database();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 1,
+        },
+        &[(1, header("scan", "Interview"), vec!["Interview".into()])],
+    )
+    .unwrap();
+    let scanner = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    scanner.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    scanner
+        .execute(
+            "UPDATE candidates SET header=?1",
+            [serde_json::to_string(&header("scan", "Updated Interview")).unwrap()],
+        )
+        .unwrap();
+    let (started, ready) = channel();
+    let (completed, result) = channel();
+    let refresh = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        completed
+            .send(db.pending_with_issues("archive", 100))
+            .unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let waiting = result.recv_timeout(Duration::from_millis(100));
+    // Release the scanner before asserting/joining so a regression cannot leave
+    // a writer lock or thread behind on Windows.
+    scanner.execute_batch("COMMIT;").unwrap();
+    let page = match waiting {
+        Err(RecvTimeoutError::Timeout) => result
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap(),
+        _ => {
+            refresh.join().unwrap();
+            panic!("refresh must wait for the existing writer instead of reading a snapshot it cannot update");
+        }
+    };
+    refresh.join().unwrap();
+    assert_eq!(page.pending_count, 1);
+    assert_eq!(page.invalid_count, 0);
+    assert_eq!(
+        page.candidates[0].header.subject.as_deref(),
+        Some("Updated Interview")
+    );
+}

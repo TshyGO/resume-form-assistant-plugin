@@ -2,7 +2,7 @@ use crate::source::{MessageLocator, Metadata, Position, SourceKind};
 use crate::{
     retry_delay, ConnectionConfig, Error, Header, Provider, Result, CHECK_INTERVAL, FAILURE_LIMIT,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -55,6 +55,24 @@ pub struct PendingCandidates {
     pub invalid_count: u32,
 }
 pub struct Database(Connection, #[cfg(test)] std::cell::Cell<usize>);
+
+fn cache_transaction(connection: &Connection) -> Result<Transaction<'_>> {
+    // Reserve the writer before taking a WAL snapshot. Upgrading an already
+    // stale read transaction can fail immediately (SQLITE_BUSY_SNAPSHOT), even
+    // with a busy timeout. BEGIN IMMEDIATE instead uses the configured bounded
+    // wait before reading, and a long-held writer is reported as Busy.
+    Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(|error| {
+        if matches!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        ) {
+            Error::Busy
+        } else {
+            Error::Storage
+        }
+    })
+}
+
 impl Database {
     /// Outside archive directories and the backup allowlist. No secrets or bodies.
     pub fn open(data_root: &Path) -> Result<Self> {
@@ -138,7 +156,7 @@ impl Database {
         // Derived, machine-local validation cache. Increment its version if the
         // candidate decoder/validation contract changes. Triggers invalidate
         // only affected rows, including writes from another connection.
-        let tx = conn.unchecked_transaction()?;
+        let tx = cache_transaction(&conn)?;
         let has_health: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='candidate_health_v1')", [], |r| r.get(0))?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS candidate_health_v1 (
             candidate TEXT PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
@@ -681,7 +699,7 @@ impl Database {
     }
 
     pub fn pending_with_issues(&self, archive: &str, limit: u32) -> Result<PendingCandidates> {
-        let tx = self.0.unchecked_transaction()?;
+        let tx = cache_transaction(&self.0)?;
         // Only unvalidated/changed pending rows require full decoding. Raw IO
         // failures still abort; malformed content is retained and counted.
         {
@@ -781,5 +799,52 @@ impl Database {
         }
         tx.commit()?;
         Ok(changed)
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn a_writer_exceeding_the_wait_returns_busy_without_changing_candidates_or_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Database::open(dir.path()).unwrap();
+        db.save_account("account", "a@qq.com").unwrap();
+        db.commit_scan(
+            "archive",
+            "account",
+            "INBOX",
+            crate::Cursor {
+                validity: 1,
+                uid: 1,
+            },
+            &[(
+                1,
+                Header::parse(b"Subject: Interview\r\n\r\n"),
+                vec!["Interview".into()],
+            )],
+        )
+        .unwrap();
+        db.0.busy_timeout(std::time::Duration::from_millis(20))
+            .unwrap();
+        let writer = Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        assert!(matches!(
+            db.pending_with_issues("archive", 100),
+            Err(Error::Busy)
+        ));
+        assert_eq!(db.decoded_candidate_count(), 0);
+        assert_eq!(db.pending_count("archive").unwrap(), 1);
+        let untouched: bool =
+            db.0.query_row("SELECT valid IS NULL FROM candidate_health_v1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(untouched);
+        writer.execute_batch("COMMIT;").unwrap();
+        let page = db.pending_with_issues("archive", 100).unwrap();
+        assert_eq!(page.pending_count, 1);
+        assert_eq!(page.invalid_count, 0);
     }
 }
