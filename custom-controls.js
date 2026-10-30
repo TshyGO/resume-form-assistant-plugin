@@ -404,9 +404,21 @@
     if (!scroller) return false;
     // 画出来的一段：选项，加上里面的文字（分组标题）和输入框。按排版位置量（offsetTop），
     // 弹层打开动画从 scale(0) 起（antd 刚画出选项时就是），看到的大小是 0，排版位置不受影响。
+    // 滚动层里面各层自己的平移也算上：TanStack Virtual、vue-virtual-scroller 每项都在 top:0，靠 transform 排开。
+    // 滚动层外面的变换（打开动画）对每一项都一样，不用管。
     const parts = [...nodes, ...Array.from(scroller.querySelectorAll('*')).filter(el => el.matches('input, textarea, select')
       || (trim(el.textContent) && !Array.from(el.children).some(child => trim(child.textContent))))];
-    const layoutTop = el => { let y = 0; for (let node = el; node; node = node.offsetParent) y += node.offsetTop || 0; return y; };
+    const shifts = new Map();
+    const shift = node => {
+      if (!node || node === scroller) return 0;
+      if (!shifts.has(node)) {
+        const matrix = /^matrix(3d)?\(([^)]*)\)/.exec(View.getComputedStyle(node).transform || '');
+        const values = matrix ? matrix[2].split(',').map(Number) : [];
+        shifts.set(node, (values[matrix?.[1] ? 13 : 5] || 0) + shift(node.parentElement));
+      }
+      return shifts.get(node);
+    };
+    const layoutTop = el => { let y = shift(el); for (let node = el; node; node = node.offsetParent) y += node.offsetTop || 0; return y; };
     let top = Infinity, bottom = -Infinity;
     for (const el of parts) {
       if (!(el.offsetHeight > 0)) continue;

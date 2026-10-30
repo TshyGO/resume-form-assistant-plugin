@@ -339,3 +339,51 @@ test("a generic list drawing only its first screen is still not complete", async
   assert.notEqual(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.picked, []);
 });
+
+// 自研下拉的虚拟列表，按 TanStack Virtual 文档的写法：每项 position:absolute; top:0，靠 transform: translateY 排开，
+// 每项的排版位置（offsetTop）都是 0。一屏 224px（7 项），多画 1 项（TanStack 默认 overscan）。
+// jsdom 不算样式，transform 直接写成 Chromium 算出来的 matrix(...)。
+function transformed(choices, drawn) {
+  const h = load(`<div class="form-item__content"><div class="phoenix-select"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li>
+    <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div>`);
+  const { w, doc } = h;
+  const root = doc.querySelector(".phoenix-select"), input = root.querySelector("input");
+  const picked = [];
+  let layer = null;
+  root.addEventListener("click", () => {
+    if (layer) return;
+    layer = doc.createElement("div");
+    layer.className = "common-unmodeled-layer";
+    layer.innerHTML = `<div class="list" style="height: 224px; overflow-y: auto;"><div class="list-spacer" style="position: relative; height: ${choices.length * 32}px;">${choices
+      .slice(0, drawn).map((text, i) => `<div class="list-item-container" style="position: absolute; top: 0; transform: matrix(1, 0, 0, 1, 0, ${i * 32});"><span class="item-text-label">${text}</span></div>`)
+      .join("")}</div></div>`;
+    layer.querySelectorAll(".item-text-label").forEach((item) => item.addEventListener("click", () => {
+      picked.push(item.textContent); root.querySelector(".phoenix-select__selected").textContent = item.textContent; layer.remove(); layer = null;
+    }));
+    doc.body.append(layer);
+  });
+  stubLayout(w, (el) => {
+    if (el.closest?.(".list-item-container")) return { top: 0, height: 32 };
+    if (el.matches?.(".list-spacer")) return { top: 0, height: choices.length * 32 };
+    if (el.matches?.(".list")) return { top: 0, height: 224, scrollHeight: choices.length * 32, clientHeight: 224 };
+    return null;
+  });
+  const target = { kind: "element", element: input, elements: [input], root, controlKind: "custom-select", hints: {} };
+  return { ...h, target, picked };
+}
+
+test("a list placed by transforms that drew every option still takes a unique partial match", async () => {
+  // 8 项全画出来了，滚动层比一屏高一项：按 offsetTop 量，8 项都在 0，会被当成只画了一行。
+  const choices = ["大专", "硕士研究生", "本科", "示例00", "示例01", "示例02", "示例03", "示例04"];
+  const h = transformed(choices, choices.length);
+  const result = await h.api.operate(h.target, "大学本科");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, ["本科"]);
+});
+
+test("a list placed by transforms that drew only its first screen is still not complete", async () => {
+  const h = transformed(SCHOOLS, 8);
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.notEqual(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, []);
+});
