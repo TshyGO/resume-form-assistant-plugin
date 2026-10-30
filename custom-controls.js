@@ -900,37 +900,53 @@
   async function pickYui(ctx, wanted, h, info, state) {
     const el = info.el, doc = el.ownerDocument, View = doc.defaultView;
     const content = yuiBox(el).querySelector('.yui-ac-content') || yuiBox(el);
-    const same = text => h.helpers.normalizeText(text) === h.helpers.normalizeText(wanted);
     const items = () => content.isConnected && h.visible(content)
       ? Array.from(content.querySelectorAll('li')).filter(li => h.visible(li) && trim(li.textContent)) : [];
     const collapsed = () => el.getAttribute('aria-expanded') !== 'true' && !items().length;
     // 浏览器窗口不在前台时 focus() 不派发 focus 事件，YUI 没记下聚焦就不显示查询结果：补一个。
     if (!doc.hasFocus?.()) el.dispatchEvent(new View.FocusEvent('focus'));
-    const reason = h.stop(ctx, true); if (reason) return { reason };
-    state.searchInput = el; state.searchBefore = el.value; state.query = wanted;
-    ctx.popup = content;
-    h.type(el, wanted, ctx);
-    let lastSeen = '', steadySince = Date.now();
-    const read = () => {
-      const list = items(), seen = list.map(li => trim(li.textContent)).join('\n');
-      if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
-      return list;
+    // 打字查询，等列表换成这次的结果，出现同名的一项或停住 0.2 秒，再找同名的一项。
+    // 打字前还开着的是上一次查询的列表（SF 停 0.2 秒再查，结果还要从网站取回）：没换掉之前不算。
+    const lookup = async text => {
+      const reason = h.stop(ctx, true); if (reason) return { reason };
+      const same = li => h.helpers.normalizeText(li.textContent) === h.helpers.normalizeText(text);
+      const texts = list => list.map(li => trim(li.textContent)).join('\n');
+      const stale = texts(items());
+      h.type(el, text, ctx);
+      let lastSeen = '', steadySince = Date.now();
+      const read = () => {
+        const list = items(), seen = texts(list);
+        if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
+        return list;
+      };
+      const shown = await h.waitUntil(ctx, doc.documentElement, read,
+        list => list.length > 0 && lastSeen !== stale && (list.some(same) || Date.now() - steadySince >= 200));
+      if (shown.reason && !(shown.reason === 'verification_timeout' && lastSeen)) {
+        return { reason: shown.reason === 'verification_timeout' ? 'options_not_rendered' : shown.reason };
+      }
+      const list = content.querySelector('ul');
+      ctx.observed = { library: 'yui', popupRole: list?.getAttribute('role') === 'listbox' ? 'listbox' : 'component' };
+      return sameOption(items().map(li => ({ node: li, text: trim(li.textContent), value: trim(li.textContent), disabled: false })), text, h.helpers);
     };
-    const shown = await h.waitUntil(ctx, doc.documentElement, read,
-      list => list.length > 0 && (list.some(li => same(li.textContent)) || Date.now() - steadySince >= 200));
-    if (shown.reason && !(shown.reason === 'verification_timeout' && lastSeen)) {
-      return { reason: shown.reason === 'verification_timeout' ? 'options_not_rendered' : shown.reason };
+    const choose = async option => {
+      const clicked = h.click(option.node, ctx, true); if (clicked) return { reason: clicked };
+      const accepted = () => h.helpers.normalizeText(el.value) === h.helpers.normalizeText(option.text) && collapsed();
+      const done = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
+      return done.reason ? { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason } : { accepted };
+    };
+    const reason = h.stop(ctx, true); if (reason) return { reason };
+    const before = String(el.value ?? '');
+    state.searchInput = el; state.searchBefore = before; state.query = wanted;
+    ctx.popup = content;
+    const found = await lookup(wanted);
+    if (found.option) { state.activated = true; return await choose(found.option); }
+    // 没选成：打过字，YUI 就当框里原来那项没选过，开了 forceSelection 的失焦时会清空（用户自己选好的也一样）。
+    // 框里原来是别的字的，打回原来的字、再点它那一项；查不到同名的一项就照旧由 run 恢复原来的字。
+    if (trim(before) && trim(before) !== trim(wanted) && !h.stop(ctx)) {
+      const back = await lookup(before);
+      if (back.option) await choose(back.option);
     }
-    const list = content.querySelector('ul');
-    ctx.observed = { library: 'yui', popupRole: list?.getAttribute('role') === 'listbox' ? 'listbox' : 'component' };
-    const found = sameOption(items().map(li => ({ node: li, text: trim(li.textContent), value: trim(li.textContent), disabled: false })), wanted, h.helpers);
-    if (!found.option) return { reason: found.reason };
-    state.activated = true;
-    const clicked = h.click(found.option.node, ctx, true); if (clicked) return { reason: clicked };
-    const chosen = found.option.text;
-    const accepted = () => h.helpers.normalizeText(el.value) === h.helpers.normalizeText(chosen) && collapsed();
-    const done = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
-    return done.reason ? { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason } : { accepted };
+    return { reason: found.reason };
   }
   // 校验提示、浮动提示（antd 的 form-item-explain、Element 的 form-item__error、role=alert / tooltip）不是建议框。
   // 只看这一块自己和它往上、还没装进输入框的几层：整张表单项标红（ant-form-item-has-error）时里面的建议框照样算。
@@ -947,7 +963,7 @@
   // #301 普通文本框写不进时再打一次字（control-adapters.js 的 text 调用）：大易 hotjob 的学校库、专业库是 antd 输入框加自研的建议框，
   // 框上没有任何下拉标记；打字只是搜索，失焦时没从建议里选就还原。保持焦点、像打字一样输入，等打字后新出现、
   // 贴着这个框的一块（认法同通用下拉，见 genericPopupFrom；校验提示不算），只点和要填的字相同的一项。
-  // 点了返回 accepted、没有这样的一块返回 typed（有的框要有按键才收下），宿主都随后失焦、按文本框核对。
+  // 点了返回 accepted；没有这样的一块（有的框要有按键才收下）、点不成或点了没换成这一项返回 typed。宿主都随后失焦、按文本框核对。
   // 有建议框但没有这一项报没有匹配的选项：恢复打字前的字，失焦收起建议框。不按 Esc：会冒泡到外层对话框（#395）。
   async function suggest(ctx, raw, h) {
     const el = ctx.el, doc = el?.ownerDocument, View = doc?.defaultView;
@@ -996,12 +1012,15 @@
       layer = seen.layer || seen.popup;
       const found = sameOption(seen.list, wanted, h.helpers);
       if (!found.option) return { reason: found.reason };
+      // 点过（或点到一半）就不恢复原来的字：网页可能按下时就选上了，随后移除建议项（React 17 在按下事件里同步更新）。
+      // 点不成、点了框里没换成这一项，都交宿主失焦后按文本框核对，不留焦点和建议框。
       undo = false;
-      const why = h.click(found.option.target || found.option.node, ctx, true); if (why) return { reason: why };
+      if (h.click(found.option.target || found.option.node, ctx, true)) { const reason = h.stop(ctx); return reason ? { reason } : { typed: true }; }
       // 点完框里换成这一项（组件可能下一拍才写）。
       const shown = await h.waitUntil(ctx, doc.documentElement, () => String(el.value ?? ''),
         value => h.helpers.normalizeText(value) === h.helpers.normalizeText(found.option.text), POPUP_LEAVE_MS);
-      return shown.reason ? { reason: shown.reason === 'verification_timeout' ? 'selection_not_committed' : shown.reason } : { accepted: true };
+      if (shown.reason && shown.reason !== 'verification_timeout') return { reason: shown.reason };
+      return shown.reason ? { typed: true } : { accepted: true };
     } finally {
       watch.disconnect();
       if (undo && !h.stop(ctx)) {

@@ -216,7 +216,8 @@ test("standard Element autocomplete: a value with no suggestion is typed in with
 
 // 大易 hotjob 学校库：antd 输入框加自研的建议框（挂在 body 下，没有 ARIA），打字只是搜索；点了一项才记下，
 // 失焦时框里换回记下的值、收起建议框。tip：没选时在表单项里显示校验提示（role=alert）。
-function hotjob({ schools = ["北京大学", "北京大学医学部", "北京交通大学"], tip = false, fetchMs = 30 } = {}) {
+// onPress：按下就选上并立刻移除建议框（React 17 在按下事件里同步更新）；link：每一项的字包在 <a href> 里。
+function hotjob({ schools = ["北京大学", "北京大学医学部", "北京交通大学"], tip = false, fetchMs = 30, onPress = false, link = false } = {}) {
   const h = load(`<div class="ant-row ant-form-item"><div class="ant-col ant-form-item-label"><label title="学校">学校</label></div>
     <div class="ant-col ant-form-item-control"><div class="ant-form-item-control-input"><div class="ant-form-item-control-input-content">
       <input class="ant-input" type="text" placeholder="请输入学校"></div></div><div class="explain-slot"></div></div></div>
@@ -241,8 +242,8 @@ function hotjob({ schools = ["北京大学", "北京大学医学部", "北京交
       const box = doc.createElement("div");
       box.className = "school-suggest";
       for (const text of schools.filter((school) => school.includes(query))) {
-        const row = doc.createElement("div"); row.className = "school-suggest-row"; row.innerHTML = `<span>${text}</span>`;
-        row.addEventListener("click", () => { state.picks.push(text); state.model = text; input.value = text; close(); if (tip) showTip(false); });
+        const row = doc.createElement("div"); row.className = "school-suggest-row"; row.innerHTML = link ? `<a href="#">${text}</a>` : `<span>${text}</span>`;
+        row.addEventListener(onPress ? "mousedown" : "click", () => { state.picks.push(text); state.model = text; input.value = text; close(); if (tip) showTip(false); });
         box.append(row);
       }
       doc.body.append(box);
@@ -285,6 +286,27 @@ test("hotjob school box: suggestions without the same name are not clicked, the 
   assert.equal(h.state.dropdown, null, "the suggestions are closed");
   assert.notEqual(h.doc.activeElement, h.input);
   assert.equal(escapes.length, 0, "no Esc that a dialog around the form would close on");
+});
+
+test("hotjob school box picking on press and removing its list at once: the pick is checked after leaving the box, not reported as gone", async () => {
+  // 评审：点击中途建议项被移除，原来直接报 element_disconnected，网页其实已经选上。
+  const h = hotjob({ onPress: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.state.picks, ["北京大学"]);
+  assert.equal(h.state.model, "北京大学");
+  assert.notEqual(h.doc.activeElement, h.input);
+});
+
+test("hotjob school box whose suggestions are links: nothing is clicked, the box is left and checked like a text box", async () => {
+  // 评审：建议项点不了（链接）时原来焦点留在框里、建议框开着、框里是打的字。
+  const h = hotjob({ link: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.reason, "value_not_committed", JSON.stringify(result));
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.input.value, "");
+  assert.equal(h.state.dropdown, null, "the suggestions are closed");
+  assert.notEqual(h.doc.activeElement, h.input);
 });
 
 test("hotjob school box: with only a validation tip and no suggestions the field still reads as not written", async () => {
@@ -332,13 +354,13 @@ test("a text box the page rewrites into another value is not tried again", async
 // SuccessFactors 的 juic.SFLegacyAutoComplete（改自 YUI 2 AutoComplete），照 2026-10 公开页的脚本写：
 // 聚焦、点击都不查询；keyup 后停一会儿按框里的字查询，最多列 10 条，先高亮第一条；点 li 才算选中，
 // 选中后框里换成这一项、建议框收起、aria-expanded=false。force（forceSelection）：失焦时没选就清空，关掉就留着打的字。
-// Tab、回车选中高亮的那一条。aria：关掉就是原版 YUI 2，输入框上没有 ARIA。
-function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, force = true, value = "" } = {}) {
+// Tab、回车选中高亮的那一条。aria：关掉就是原版 YUI 2，输入框上没有 ARIA。delay：keyup 后到出结果。
+function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, force = true, value = "", delay = 20, options } = {}) {
   const items = Array.from({ length: 10 }, (_, index) => `<li role="option" id="YUIListItem${index}" style="display:none"></li>`).join("");
   const h = load(`<div class="row"><label for="country">Country</label>
     <div class="yui-ac"><input id="country" type="text" class="yui-ac-input" ${aria ? 'role="combobox" aria-expanded="false"' : ""} autocomplete="off" value="${value}">
       <div id="country-box" class="yui-ac-container"><div class="yui-ac-content" style="display:none"><div class="yui-ac-hd" style="display:none"></div>
-        <div class="yui-ac-bd"><ul role="listbox">${items}</ul></div><div class="yui-ac-ft" style="display:none"></div></div></div></div></div>`);
+        <div class="yui-ac-bd"><ul role="listbox">${items}</ul></div><div class="yui-ac-ft" style="display:none"></div></div></div></div></div>`, options);
   const { doc } = h;
   const input = doc.querySelector("input"), content = doc.querySelector(".yui-ac-content"), list = Array.from(doc.querySelectorAll("li"));
   const state = { focused: false, selected: false, open: false, highlighted: null, queries: [], picks: [] };
@@ -364,7 +386,7 @@ function yui({ countries = ["Germany", "Georgia", "Ghana"], aria = true, force =
       list.forEach((li, index) => { li.textContent = found[index] || ""; li.style.display = found[index] ? "" : "none"; });
       state.highlighted = found.length ? list[0] : null;
       toggle(found.length > 0);
-    }, 20);
+    }, delay);
   });
   doc.querySelector(".yui-ac-container").addEventListener("click", (event) => { const li = event.target.closest("li"); if (li) select(li); });
   input.addEventListener("blur", () => {
@@ -399,6 +421,18 @@ test("SuccessFactors YUI autocomplete: without the same name nothing is picked a
   assert.equal(h.input.value, "");
   assert.equal(h.content.style.display, "none");
   assert.equal(escapes.length, 0);
+});
+
+test("SuccessFactors YUI autocomplete with an item chosen before: when the new value has no same-named item the old item is picked again", async () => {
+  // 评审复现（真浏览器 yui2 2.9.0）：用户选好的 Germany，插件打过字没选成，失焦后被 forceSelection 清空；main 上留着。
+  // 结果要停 0.25 秒才出：再打回 Germany 时，开着的还是上一次查 Ghan 的列表，不能拿它找。
+  const h = yui({ value: "Germany", delay: 250, options: { timeoutMs: 1500 } });
+  h.state.selected = true;
+  const result = await h.api.operate(h.target, "Ghan");
+  assert.equal(result.reason, "no_option_match", JSON.stringify(result));
+  assert.deepEqual(h.state.picks, ["Germany"]);
+  assert.equal(h.input.value, "Germany");
+  assert.equal(h.content.style.display, "none");
 });
 
 test("SuccessFactors YUI autocomplete already showing the wanted value: it is picked again, so leaving the box does not clear it", async () => {
