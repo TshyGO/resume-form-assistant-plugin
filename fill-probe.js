@@ -26,6 +26,8 @@
   ];
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const MAX_ANCESTORS = 4;
+  const MAX_FRAME_DEPTH = 2;
+  const NOT_FILLABLE = /^(?:button|submit|reset|image|file)$/i;
   const MAX_LABEL = 16;
   // 判断是不是网申填写页：地址里的强信号可以是子串（applyJob、myResume），form / profile 这类常见词要整词出现
   // （platform、information 不算）。职位详情、招聘首页（job、career、campus）不算填写页。
@@ -117,24 +119,43 @@
     return found.size;
   }
 
-  // 页面层面的线索：只数数，不输出内容。
-  function probePage(doc, { href = "" } = {}) {
-    const frames = Array.from(doc.querySelectorAll(SELECTORS.frames)).filter(sized);
-    let crossOrigin = 0;
-    let frameInputs = 0;
+  // 框架里的线索。同源框架再往下看一层（#400 一键填写最多进两层）：数输入框，和其中看得见的可填输入框
+  // （框架本身也看得见才算）。
+  function frameClues(doc, shownFrame = true, depth = 1) {
+    const clues = { total: 0, crossOrigin: 0, frameInputs: 0, visibleInputs: 0 };
+    let frames = [];
+    try {
+      frames = Array.from(doc.querySelectorAll(SELECTORS.frames)).filter(sized);
+    } catch {
+      return clues;
+    }
     for (const frame of frames) {
+      clues.total += 1;
       // 跨域框架读不到文档；同源框架正在跳转时查询也可能失败，都按读不到算，不能丢掉整份线索。
+      let inner = null;
       let inputs = null;
       try {
-        const inner = frame.contentDocument;
-        inputs = inner ? Array.from(inner.querySelectorAll(SELECTORS.inputs)).length : null;
+        inner = frame.contentDocument;
+        inputs = inner ? Array.from(inner.querySelectorAll(SELECTORS.inputs)) : null;
       } catch {
         inputs = null;
       }
-      if (inputs === null) crossOrigin += 1;
-      else frameInputs += inputs;
+      if (inputs === null) {
+        clues.crossOrigin += 1;
+        continue;
+      }
+      const seen = shownFrame && visible(frame);
+      clues.frameInputs += inputs.length;
+      if (seen) clues.visibleInputs += inputs.filter(el => visible(el) && !NOT_FILLABLE.test(el.getAttribute?.("type") || "")).length;
+      if (depth >= MAX_FRAME_DEPTH) continue;
+      const nested = frameClues(inner, seen, depth + 1);
+      for (const key of Object.keys(clues)) clues[key] += nested[key];
     }
+    return clues;
+  }
 
+  // 页面层面的线索：只数数，不输出内容。
+  function probePage(doc, { href = "" } = {}) {
     const byLibrary = {};
     let customTotal = 0;
     for (const control of shown(doc.querySelectorAll(SELECTORS.custom))) {
@@ -148,7 +169,7 @@
     const all = doc.querySelectorAll(SELECTORS.all);
     return {
       host: hostOf(href),
-      frames: { total: frames.length, crossOrigin, frameInputs },
+      frames: frameClues(doc),
       custom: { total: customTotal, byLibrary },
       editButtons: countEditControls(doc),
       // 只读的下拉输入框属于自定义控件，不算；禁用的输入框即使套在自定义控件里也照算。
@@ -232,6 +253,11 @@
   // 不让用户去点「立即申请」「投递」这类按钮：在招聘网站上点一下可能就投出去了。
   function emptyPageHint(probe, { notForm = false, form = false, deepAvailable = false } = {}) {
     if (!probe) return "";
+    // #400 同源框架里有看得见的输入框：一键填写已经进框架扫过，还是没认出字段。表单就在眼前，不再让用户先点「编辑」。
+    if (probe.frames?.visibleInputs > 0) {
+      return `表单在网页的内嵌框架里，一键填写没认出字段。${deepAvailable
+        ? "可以试试下方的「深度分析本页」。" : "可以把侧栏的「填写诊断」复制给我们。"}`;
+    }
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
     if (notForm) {

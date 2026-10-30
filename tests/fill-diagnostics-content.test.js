@@ -65,12 +65,12 @@ test("a video-interview room with nothing to fill is not reported, and the user 
   assert.match(run1.report, /^page_type_reason: none$/m);
 });
 
-test("an application page whose form sits in a cross-origin frame is reported as iframe_blocked", async () => {
+test("an application page whose form sits in a cross-origin frame is reported as iframe_cross_origin", async () => {
   const { reports } = await run({ path: "/campus/apply/2024", probe: { ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } } });
   assert.equal(reports.length, 1);
   assert.equal(reports[0].kind, "fill_failed");
   const block = reports[0].diagnostics;
-  for (const line of ["error_category: iframe_blocked", "first_failing_stage: scan", "iframes_cross_origin: 1",
+  for (const line of ["error_category: iframe_cross_origin", "first_failing_stage: scan", "iframes_cross_origin: 1",
     "url_path: /campus/apply/:id", "page_type: application_form", "page_type_reason: url", "ai_called: false",
     "dom_ready_at_scan: false"]) {
     assert.ok(block.split("\n").includes(line), `${line}\n${block}`);
@@ -79,10 +79,10 @@ test("an application page whose form sits in a cross-origin frame is reported as
   assert.ok(!block.includes("secret-session"));
 });
 
-test("a page with no form signals but a cross-origin frame is still reported, as iframe_blocked", async () => {
+test("a page with no form signals but a cross-origin frame is still reported, as iframe_cross_origin", async () => {
   const { reports, result } = await run({ path: "/jobs/1970", probe: { ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } } });
   assert.equal(reports.length, 1);
-  assert.match(reports[0].diagnostics, /^error_category: iframe_blocked$/m);
+  assert.match(reports[0].diagnostics, /^error_category: iframe_cross_origin$/m);
   assert.match(reports[0].diagnostics, /^page_type: unknown$/m);
   assert.match(result.error, /内嵌框架/);
 });
