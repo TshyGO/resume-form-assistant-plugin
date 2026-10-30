@@ -369,7 +369,8 @@
   }
   // #301 虚拟列表（antd 4/5 默认、Element Plus el-select-v2）只画出看得见的十来项，同名的一项可能还在屏外。
   // 装着选项、能滚动的那一层，内容比画出来的选项和文字高出大半行以上，就算列表不全；里面画全了的（短的、不虚拟的长列表）不算。
-  // 量不出高度（没有排版）时只看虚拟列表的类名；antd 不管长短都套着 rc-virtual-list，只有滚动条说明在虚拟滚动。
+  // 量不出高度（没有排版，jsdom）时只看虚拟列表的类名；真浏览器里画出的选项都有高度，走不到这里。
+  // antd 不管长短都套着 rc-virtual-list，只有滚动条说明在虚拟滚动。
   const VIRTUAL_MARKS = '[class*="virtual" i]:not(.rc-virtual-list):not(.rc-virtual-list-holder):not(.rc-virtual-list-holder-inner), .el-vl__wrapper, [class*="recycle-scroller" i]';
   function partialList(list, popup, layer) {
     const nodes = list.map(option => option.node).filter(node => node?.isConnected);
@@ -378,11 +379,17 @@
     const rows = nodes.map(node => node.offsetHeight).filter(height => height > 0).sort((a, b) => a - b);
     if (!rows.length) return marked;
     const limit = layer?.isConnected && layer.contains(popup) ? layer : popup;
+    const View = popup.ownerDocument.defaultView;
     let box = nodes[0].parentElement;
     while (box && box !== limit && !nodes.every(node => box.contains(node))) box = box.parentElement;
     let scroller = null;
     for (let node = limit.contains(box) ? box : null; node && !scroller; node = node === limit ? null : node.parentElement) {
-      if (node.scrollHeight > node.clientHeight + 1 && node.ownerDocument.defaultView.getComputedStyle(node).overflowY !== 'visible') scroller = node;
+      const overflow = View.getComputedStyle(node).overflowY;
+      if (!overflow || overflow === 'visible') continue;
+      if (node.scrollHeight > node.clientHeight + 1) scroller = node;
+      // 先碰到原生滚动区（auto、scroll）而它自己不用滚：选项在里面画全了。外面 overflow:hidden 的一层多出来的
+      // 可能只是被推到外面的滚动条（Element UI 2 的 el-scrollbar 用负外边距藏原生滚动条，Windows 上多出 15px 左右）。
+      else if (/^(?:auto|scroll|overlay)$/.test(overflow)) return false;
     }
     if (!scroller) return false;
     // 画出来的一段：选项，加上里面的文字（分组标题）和输入框。按排版位置量（offsetTop），
@@ -397,7 +404,10 @@
       top = Math.min(top, y); bottom = Math.max(bottom, y + el.offsetHeight);
     }
     if (!(bottom > top)) return marked;
-    return scroller.scrollHeight - (bottom - top) > Math.max(rows[Math.floor(rows.length / 2)] * 0.6, 20);
+    // 滚动层自己的上下内边距不算没画出来。没画出来的选项按整行留位置，比一行略少的空白（底部的加载图标位）也不算。
+    const css = View.getComputedStyle(scroller);
+    const padding = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
+    return scroller.scrollHeight - padding - (bottom - top) > Math.max(rows[Math.floor(rows.length / 2)] * 0.8, 20);
   }
   // partial：列表不全（见 partialList）。只认完全相同或归一化相同的一项，不靠「包含」去猜，几项都沾边也按没有匹配，好去搜索。
   function match(list, value, helpers, freeText = false, partial = false) {

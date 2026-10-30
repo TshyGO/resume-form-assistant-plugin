@@ -19,7 +19,9 @@ function load(control) {
 const SCHOOLS = Array.from({ length: 100 }, (_, i) => i === 0 ? "北京大学医学部" : i === 60 ? "北京大学" : `示例大学${String(i).padStart(3, "0")}`);
 
 // AntD 4/5 Select：showSearch 时输入框能打字，按选项文字筛选（antd 默认的 filterOption）。一屏画 10 项。
-function antd(choices, { search = false } = {}) {
+// layout：按真 antd 量到的排版补上高度（每项 32px；holder 高 256、overflow-y:hidden，内容高是全部选项；里面的占位层和全部选项一样高）。
+// 不给排版时走的是没有排版时看类名的兜底。
+function antd(choices, { search = false, layout = false } = {}) {
   const h = load(`<div class="ant-select ant-select-single${search ? " ant-select-show-search" : ""}"><div class="ant-select-selector">
     <span class="ant-select-selection-search"><input type="search" autocomplete="off" class="ant-select-selection-search-input" role="combobox"
       aria-haspopup="listbox" aria-owns="rc_select_0_list" aria-autocomplete="list" aria-controls="rc_select_0_list" aria-expanded="false"${search ? "" : " readonly"}></span>
@@ -58,6 +60,16 @@ function antd(choices, { search = false } = {}) {
   };
   root.querySelector(".ant-select-selector").addEventListener("click", () => render());
   input.addEventListener("input", () => { searches.push(input.value); setTimeout(render, 10); });
+  if (layout) stubLayout(h.w, (el) => {
+    const item = el.closest?.(".ant-select-item-option");
+    if (item) return { top: Array.from(item.parentElement.children).indexOf(item) * 32, height: 32 };
+    const holder = el.closest?.(".rc-virtual-list-holder");
+    if (!holder) return null;
+    const drawn = holder.querySelectorAll(".ant-select-item-option").length * 32;
+    const total = parseFloat(holder.firstElementChild.style.height) || drawn;
+    if (el === holder) return { top: 0, height: Math.min(total, 256), scrollHeight: total, clientHeight: Math.min(total, 256) };
+    return { top: 0, height: el.matches(".rc-virtual-list-holder-inner") ? drawn : total };
+  });
   const target = { kind: "element", element: input, elements: [input], root, controlKind: "custom-select", hints: {} };
   return { ...h, target, picked, searches };
 }
@@ -100,8 +112,32 @@ test("AntD 4/5 short list (no virtual scrolling): a unique partial match is stil
   assert.deepEqual(h.picked, ["本科"]);
 });
 
+// 下面几个按排版判断（真浏览器里走的就是这条路）。
+test("AntD 4/5 virtual list measured by layout: a longer name on the first screen is not taken", async () => {
+  const h = antd(SCHOOLS, { layout: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.reason, "no_option_match", JSON.stringify(result));
+  assert.deepEqual(h.picked, []);
+});
+
+test("AntD 4/5 virtual list measured by layout, with search: the same name is chosen after searching", async () => {
+  const h = antd(SCHOOLS, { search: true, layout: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, ["北京大学"]);
+  assert.deepEqual(h.searches, ["北京大学"]);
+});
+
+test("AntD 4/5 short list measured by layout: a unique partial match is still chosen", async () => {
+  const h = antd(["大专", "本科", "硕士研究生", "博士研究生", "其他"], { layout: true });
+  const result = await h.api.operate(h.target, "大学本科");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, ["本科"]);
+});
+
 // Element Plus el-select-v2：根和 el-select 一样是 .el-select，选中的文字在 .el-select__placeholder 里。一屏画 11 项。
-function selectV2(choices) {
+// layout：每项 34px，.el-vl__window 高 274、自己滚动，里面一层和全部选项一样高。
+function selectV2(choices, { layout = false } = {}) {
   const h = load(`<div class="el-select"><div class="el-select__wrapper"><div class="el-select__selection">
     <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"
       class="el-select__input" role="combobox" readonly type="text"></div>
@@ -126,9 +162,31 @@ function selectV2(choices) {
     }
     popper.hidden = false; input.setAttribute("aria-expanded", "true");
   });
+  const total = choices.length * 34;
+  if (layout) stubLayout(h.w, (el) => {
+    const item = el.closest?.(".el-select-dropdown__item");
+    if (item) return { top: Array.from(item.parentElement.children).indexOf(item) * 34, height: 34 };
+    if (el.matches?.(".el-vl__window")) return { top: 0, height: Math.min(total, 274), scrollHeight: total, clientHeight: Math.min(total, 274) };
+    if (el.parentElement?.matches(".el-vl__window")) return { top: 0, height: total };
+    return null;
+  });
   const target = { kind: "element", element: input, elements: [input], root, controlKind: "custom-select", hints: {} };
   return { ...h, target, picked };
 }
+
+test("Element Plus el-select-v2 measured by layout: a longer name on the first screen is not taken", async () => {
+  const h = selectV2(SCHOOLS, { layout: true });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.equal(result.reason, "no_option_match", JSON.stringify(result));
+  assert.deepEqual(h.picked, []);
+});
+
+test("Element Plus el-select-v2 short list measured by layout: a unique partial match is still chosen", async () => {
+  const h = selectV2(["大专", "本科", "硕士研究生", "博士研究生", "其他"], { layout: true });
+  const result = await h.api.operate(h.target, "大学本科");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, ["本科"]);
+});
 
 test("Element Plus el-select-v2: a longer name on the first screen is not taken for the wanted one off screen", async () => {
   const h = selectV2(SCHOOLS);
@@ -169,7 +227,9 @@ test("AntD 4/5 nine options (virtual scrolling, but all drawn): a unique partial
 
 // 没有虚拟列表类名时按排版判断（真浏览器里都按这个）：给 Element UI 2 结构的下拉补上高度。
 // 选项每项 34px，滚动层高 274px，列表上下各 6px 内边距。rendered 是画出来的项数（自己做的虚拟列表只画前 10 项）。
-function elementUi(choices, rendered) {
+// scrollbar：系统滚动条的宽度（Windows Chrome 15px）。el-scrollbar 用负外边距把原生滚动条推出外层 overflow:hidden 的
+// .el-scrollbar，短列表时滚动层自己不滚，外层却多出一条滚动条宽（真 Chromium 里量到 scrollHeight 197、clientHeight 182）。
+function elementUi(choices, rendered, { scrollbar = 0 } = {}) {
   const h = load(`<div class="el-select"><div class="el-input el-input--suffix"><input type="text" readonly autocomplete="off" placeholder="请选择" class="el-input__inner"></div></div>`);
   const { w, doc } = h;
   const root = doc.querySelector(".el-select"), input = root.querySelector("input");
@@ -178,7 +238,7 @@ function elementUi(choices, rendered) {
   root.querySelector(".el-input").addEventListener("click", () => {
     if (!dropdown) {
       dropdown = doc.createElement("div"); dropdown.className = "el-select-dropdown el-popper";
-      dropdown.innerHTML = `<div class="el-scrollbar"><div class="el-select-dropdown__wrap el-scrollbar__wrap" style="overflow-y: scroll;"><ul class="el-select-dropdown__list">${choices.slice(0, rendered)
+      dropdown.innerHTML = `<div class="el-scrollbar" style="overflow-y: hidden;"><div class="el-select-dropdown__wrap el-scrollbar__wrap" style="overflow-y: scroll;"><ul class="el-select-dropdown__list">${choices.slice(0, rendered)
         .map((text) => `<li class="el-select-dropdown__item"><span>${text}</span></li>`).join("")}</ul></div></div>`;
       dropdown.querySelectorAll("li").forEach((li) => li.addEventListener("click", () => { picked.push(li.textContent); input.value = li.textContent; dropdown.hidden = true; }));
       doc.body.append(dropdown);
@@ -186,10 +246,13 @@ function elementUi(choices, rendered) {
     dropdown.hidden = false;
   });
   // 排版：滚动层从 100px 起；第 i 项在 106 + 34i。滚动内容高 = 全部选项 + 上下内边距。
+  const content = choices.length * 34 + 12, short = content <= 274;
   const box = (el) => {
     const item = el.closest?.(".el-select-dropdown__item");
     if (item) { const top = 106 + Array.from(item.parentElement.children).indexOf(item) * 34; return { top, height: 34 }; }
-    if (el.matches?.(".el-select-dropdown__wrap")) return { top: 100, height: 274, scrollHeight: choices.length * 34 + 12, clientHeight: 274 };
+    if (el.matches?.(".el-select-dropdown__wrap")) return short ? { top: 100, height: content + scrollbar, scrollHeight: content, clientHeight: content }
+      : { top: 100, height: 274, scrollHeight: content, clientHeight: 274 };
+    if (el.matches?.(".el-scrollbar") && short) return { top: 100, height: content, scrollHeight: content + scrollbar, clientHeight: content };
     return null;
   };
   stubLayout(w, box);
@@ -210,4 +273,69 @@ test("a long list that drew every option still takes a unique partial match", as
   const result = await h.api.operate(h.target, "大学本科");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.picked, ["本科"]);
+});
+
+test("Element UI 2 short el-select with a 15px system scrollbar: a unique partial match is still chosen", async () => {
+  for (const [value, wanted] of [["大学本科", "本科"], ["硕士", "硕士研究生"]]) {
+    const degrees = ["大专", "本科", "硕士研究生", "博士研究生", "其他"];
+    const h = elementUi(degrees, degrees.length, { scrollbar: 15 });
+    const result = await h.api.operate(h.target, value);
+    assert.equal(result.ok, true, `${value}: ${JSON.stringify(result)}`);
+    assert.deepEqual(h.picked, [wanted]);
+  }
+});
+
+// 自研下拉（北森式结构），选项全画出来，放在自己带上下内边距、能滚动的一层里。foot 是列表底部一个没有文字的空白元素。
+function paddedGeneric(choices, { padding, foot = 0 }) {
+  const h = load(`<div class="form-item__content"><div class="phoenix-select"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li>
+    <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div>`);
+  const { w, doc } = h;
+  const root = doc.querySelector(".phoenix-select"), input = root.querySelector("input");
+  const picked = [];
+  let layer = null;
+  root.addEventListener("click", () => {
+    if (layer) return;
+    layer = doc.createElement("div");
+    layer.className = "common-unmodeled-layer";
+    layer.innerHTML = `<div class="list" style="max-height: 220px; overflow-y: auto; padding-top: ${padding}px; padding-bottom: ${padding}px;">${choices
+      .map((text) => `<div class="list-item-container"><span class="item-text-label">${text}</span></div>`).join("")}${foot ? '<div class="list-foot"></div>' : ""}</div>`;
+    layer.querySelectorAll(".item-text-label").forEach((item) => item.addEventListener("click", () => {
+      picked.push(item.textContent); root.querySelector(".phoenix-select__selected").textContent = item.textContent; layer.remove(); layer = null;
+    }));
+    doc.body.append(layer);
+  });
+  stubLayout(w, (el) => {
+    const item = el.closest?.(".list-item-container");
+    if (item) return { top: padding + Array.from(item.parentElement.children).indexOf(item) * 32, height: 32 };
+    if (el.matches?.(".list-foot")) return { top: padding + choices.length * 32, height: foot };
+    if (el.matches?.(".list")) return { top: 0, height: 220, scrollHeight: choices.length * 32 + foot + padding * 2, clientHeight: 220 };
+    return null;
+  });
+  const target = { kind: "element", element: input, elements: [input], root, controlKind: "custom-select", hints: {} };
+  return { ...h, target, picked };
+}
+
+test("a generic list that drew every option is complete despite its own padding or an empty foot", async () => {
+  const choices = ["大专", "硕士", "本科", ...Array.from({ length: 27 }, (_, i) => `示例${String(i).padStart(2, "0")}`)];
+  for (const shape of [{ padding: 12 }, { padding: 4, foot: 24 }]) {
+    const h = paddedGeneric(choices, shape);
+    const result = await h.api.operate(h.target, "大学本科");
+    assert.equal(result.ok, true, `${JSON.stringify(shape)}: ${JSON.stringify(result)}`);
+    assert.deepEqual(h.picked, ["本科"]);
+  }
+});
+
+test("a generic list drawing only its first screen is still not complete", async () => {
+  // 同样的结构，只画了前 10 项，滚动内容按全部 100 项留了位置：屏外可能有同名的一项。
+  const h = paddedGeneric(SCHOOLS.slice(0, 10), { padding: 12 });
+  const list = () => h.doc.querySelector(".list");
+  stubLayout(h.w, (el) => {
+    const item = el.closest?.(".list-item-container");
+    if (item) return { top: 12 + Array.from(item.parentElement.children).indexOf(item) * 32, height: 32 };
+    if (el === list()) return { top: 0, height: 220, scrollHeight: 100 * 32 + 24, clientHeight: 220 };
+    return null;
+  });
+  const result = await h.api.operate(h.target, "北京大学");
+  assert.notEqual(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.picked, []);
 });
