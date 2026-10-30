@@ -281,6 +281,37 @@ test("an early choice that makes the page rebuild the AI's empty fields asks no 
   assert.equal(result.filledCount, 4);
 });
 
+// 同上，但用户在等 AI 时往重画出来的新字段里填了：和没重画的字段一样保留不覆盖，不当成「页面已变化、没填上」。
+test("a field the early choice rebuilt and the user then typed into while the AI works is kept, not reported as unfilled", async (t) => {
+  const GENDER = item("gender", "性别", `<select id="gender" name="gender"><option value="">请选择</option><option value="m">男</option><option value="f">女</option></select>`);
+  const p = page(t, input("name", "姓名") + GENDER + input("school", "毕业院校") + input("major", "专业"), {
+    onGender: (doc) => {
+      for (const [id, label] of [["school", "毕业院校"], ["major", "专业"]]) {
+        const holder = doc.createElement("div");
+        holder.innerHTML = input(id, label);
+        doc.getElementById(`${id}-item`).replaceWith(holder.firstChild);
+      }
+    }
+  });
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("gender") === "m" && p.worker.calls.length === 1 && /AI 匹配中/.test(p.ui.fill.textContent)),
+    "the select is chosen before the AI answers");
+  const school = p.w.document.getElementById("school");
+  school.value = "自己填的学校";
+  school.dispatchEvent(new p.w.Event("input", { bubbles: true }));
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.deepEqual(p.confirms, []);
+  assert.deepEqual(["name", "gender", "school", "major"].map(p.value), ["测试用户", "m", "自己填的学校", "示例专业"]);
+  assert.equal(result.outcome, "partial");
+  assert.equal(result.filledCount, 3);
+  assert.equal(result.unfilledCount, 0);
+  assert.equal(p.ui.status.textContent, "已填写 3 个字段。等 AI 时有改动的 1 项没有覆盖：毕业院校，请核对。");
+  const report = (await p.report()).diagnosticsReport;
+  assert.equal(lineOf(report, "drop_reasons"), "changed_while_waiting=1");
+  assert.equal(p.sent.filter((type) => type === "FEEDBACK_AUTO").length, 0, "the user's own input is not reported");
+});
+
 // AI 比先填先回来：诊断里的匹配往返是 AI 回来的时间，不含等先填写完的时间。
 test("the match time is the AI's round trip even when the early fill takes longer", async (t) => {
   const GENDER = item("gender", "性别", `<select id="gender" name="gender"><option value="">请选择</option><option value="m">男</option><option value="f">女</option></select>`);

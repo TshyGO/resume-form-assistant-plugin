@@ -2893,15 +2893,25 @@
           && isFieldBindingCurrent(item.element) && fillValueSnapshot(item.element) === item.after);
         const later = [];
         const occupied = new Set();
+        const keep = (match) => {
+          const meta = fieldMetaMap.get(match.fieldId);
+          kept.push(meta?.label || meta?.placeholder || meta?.name || "未命名字段");
+        };
         for (const match of sortedMatches) {
           let entry = fieldMap.get(match.fieldId);
           if (entry && !plain) approvedValues.set(entry, fillValueSnapshot(entry));
           else if (entry && !isFieldBindingCurrent(entry)) {
             // 先填的选择让页面重画了后面的字段（#269 智联）：找回的新字段和点击时一样，就按新字段判断有没有内容；
-            // 找不回或内容变了的不算已有内容，交给下面循环里原有的重绑和写入前复查。
+            // 新字段的内容变了（等 AI 时用户在新字段里填了，或页面带出的值），和没重画的字段一样保留不覆盖。
+            // 找不回或读不出内容的，交给下面循环里原有的重绑和写入前复查。
             const fresh = rebindFieldEntry(entry);
-            if (!fresh || fillValueSnapshot(fresh) !== approvedValues.get(entry)) {
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            if (now === null) {
               later.push(match);
+              continue;
+            }
+            if (now !== approvedValues.get(entry)) {
+              keep(match);
               continue;
             }
             approvedValues.set(fresh, approvedValues.get(entry));
@@ -2909,8 +2919,7 @@
             fieldMap.set(match.fieldId, fresh);
             entry = fresh;
           } else if (entry && fillValueSnapshot(entry) !== approvedValues.get(entry)) {
-            const meta = fieldMetaMap.get(match.fieldId);
-            kept.push(meta?.label || meta?.placeholder || meta?.name || "未命名字段");
+            keep(match);
             continue;
           }
           // 先填时页面跟着带出值的另一半（Moka 的月份）不算已有内容。
