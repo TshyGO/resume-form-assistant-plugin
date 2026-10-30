@@ -220,7 +220,10 @@
     if (Number(summary.unfilledCount) > 0 || Number(summary.unconfirmedCount) > 0) return "prominent";
     if (probe) {
       const scannedCustom = Number(summary.scannedCustom) || 0;
-      if ((probe.custom?.total || 0) > scannedCustom || probe.shadowHosts > 0 || probe.frames?.frameInputs > 0) return "prominent";
+      // #400 一键填写已经从同源框架里扫到了字段：框架里的输入框不再算只有深度分析才读得到的。
+      const framesScanned = Number(summary.stats?.frameFields) > 0;
+      if ((probe.custom?.total || 0) > scannedCustom || probe.shadowHosts > 0
+        || (probe.frames?.frameInputs > 0 && !framesScanned)) return "prominent";
       if (["none", "no_context"].includes(code) && probe.editButtons > 0) return "prominent";
     }
     return "secondary";

@@ -1088,10 +1088,56 @@
     });
   }
 
+  // --- 同源框架 ---------------------------------------------------------------
+
+  // #400 表单在同源 iframe 里（人事考试网、标签页式后台）：一键填写要进去扫。只进看得见、够大（和 fill-probe.js
+  // 一样至少 100×50）、横向在视口里的框架，最多往下两层。标签页式后台没切到的页签是 display:none，或者挪到视口
+  // 左右两侧之外；在下面、要往下滚才看到的照样进。跨域的、还没有文档的跳过。只读结构，按文档顺序返回。
+  const FRAME_SELECTOR = "iframe, frame";
+  const MIN_FRAME_WIDTH = 100;
+  const MIN_FRAME_HEIGHT = 50;
+  const MAX_FRAME_DEPTH = 2;
+
+  function frameInView(frame, rect) {
+    const view = frame.ownerDocument?.defaultView;
+    const width = Number(view?.innerWidth) || 0;
+    if (width > 0 && (rect.right <= 0 || rect.left >= width)) return false;
+    // 页面上方之外（top 是很大的负数）也算挪走了；只是往下滚过了头的还在页面里。
+    return rect.bottom + (Number(view?.scrollY) || 0) > 0;
+  }
+
+  function frameDocuments(doc, options = {}, depth = 1) {
+    const ctx = makeContext(doc, options);
+    const found = [];
+    let frames = [];
+    try {
+      frames = Array.from(doc.querySelectorAll(FRAME_SELECTOR));
+    } catch {
+      return found;
+    }
+    for (const frame of frames) {
+      if (ctx.excluded(frame) || !ctx.isVisible(frame)) continue;
+      let rect = null;
+      let inner = null;
+      try {
+        rect = frame.getBoundingClientRect();
+        inner = frame.contentDocument;
+      } catch {
+        continue;
+      }
+      if (!rect || rect.width < MIN_FRAME_WIDTH || rect.height < MIN_FRAME_HEIGHT || !frameInView(frame, rect)) continue;
+      if (!inner?.documentElement) continue;
+      found.push({ frame, doc: inner, depth });
+      if (depth < MAX_FRAME_DEPTH) found.push(...frameDocuments(inner, options, depth + 1));
+    }
+    return found;
+  }
+
   const api = {
     MAX_OFFER_CHARS,
     cleanLabel,
     displayedStateForGuard,
+    frameDocuments,
     hasDisplayedValue,
     isBindingCurrent,
     isNoiseText,
