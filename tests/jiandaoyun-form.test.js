@@ -160,12 +160,12 @@ test("label sources fold the new kinds into the reported vocabulary, and picker=
 // - 点日子 / 月份 / 年份格子：交给表单、收起。在框外按下鼠标：收起，把日历指着的日子交给表单。
 // - 框失焦：框里改成按格式显示，日历不收起，表单里还是原来的值。框有焦点时点框不收起，失焦后再点框才收起，
 //   也把日历指着的日子交给表单。
-// - 点框里的清除按钮：表单里清空，日历收起；框里的字等失焦才清掉。
+// - 点框里的清除按钮：表单里清空，日历收起；框里的字等失焦才清掉。clear: false 没有清除按钮，"inert" 有按钮、点了没反应。
 // - Esc：收起但不交给表单。
 const TODAY = { y: 2026, m: 10, d: 31 };
-function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "" } = {}) {
+function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "", clear = true } = {}) {
   const dom = new JSDOM(`<div class="fx-form"><div class="widget-list">
-    <div class="fx-field"><div class="field-label"><div class="field-name">出生年月</div></div><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" value=""></div></div></div><i class="clear-icon"></i><i class="datetime-icon"></i></div></div></div></div>
+    <div class="fx-field"><div class="field-label"><div class="field-name">出生年月</div></div><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input${clear ? " has-clear" : ""}"><div class="datetime-label" tabindex="0"><div class="x-input x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" value=""></div></div></div>${clear ? `<i class="clear-icon"></i>` : ""}<i class="datetime-icon"></i></div></div></div></div>
     <div class="fx-field"><div class="field-label"><div class="field-name">姓名</div></div><div class="field-component"><input type="text" id="other"></div></div>
   </div></div>`, { runScripts: "outside-only" });
   const w = dom.window, doc = w.document;
@@ -262,8 +262,9 @@ function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "" } = 
     state.pending = parse(input.value);
     render();
   });
-  doc.querySelector(".clear-icon").addEventListener("click", (event) => {
+  doc.querySelector(".clear-icon")?.addEventListener("click", (event) => {
     event.stopPropagation();
+    if (clear === "inert") return;
     commit(null);
     state.open = false;
     if (popup) popup.hidden = true;
@@ -341,6 +342,21 @@ test("a date the form does not allow fails, keeps the old value and closes the c
   assert.equal(empty.popupOpen(), false);
   assert.deepEqual(empty.state.keys, []);
   assert.deepEqual(empty.state.outside, []);
+});
+
+test("an empty box that cannot be cleared closes on Esc after a failed date, so the form stays empty", async () => {
+  // 失焦再点框、点别处都会把日历指着的日子（打的那天）交给表单。没有清除按钮，或点了没收起：按 Esc，收起、不交。
+  // 框里留着打的字（真组件按 Esc 也这样），表单里是空的。
+  for (const clear of [false, "inert"]) {
+    const h = jdyDateBox({ min: "2000-01-01", clear });
+    const result = await h.operate("1990-01-01");
+    assert.equal(result.reason, "no_option_match", String(clear));
+    assert.equal(h.state.model, "", String(clear));
+    assert.equal(h.state.commits, 0, String(clear));
+    assert.equal(h.popupOpen(), false, String(clear));
+    assert.deepEqual(h.state.keys, ["Escape"], String(clear));
+    assert.deepEqual(h.state.outside, [], String(clear));
+  }
 });
 
 test("impossible or too coarse dates fail before the calendar is touched; date-time boxes are left alone", async () => {

@@ -482,7 +482,7 @@
     // 做法：点开日历，看它选日、选月还是选年（带时间的不处理）；按资料的精度打 YYYY-MM-DD / YYYY-MM / YYYY，
     // 日历的年、月和选中的格子对上了，再点那一格：日历自己收起并提交。
     // 选不成时收起自己点开的日历，表单里留原来的值，见 jdyRestore。
-    // 不按键：Esc 收起日历但不提交，框里留着打的字，表单里没有。
+    // 填写不按键：Esc 收起日历但不提交，框里留着打的字，表单里没有。只在选不成、原来为空又清不掉时用它收起。
     function jdyDateParts(raw) {
       const text = String(raw ?? '').trim();
       const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helpers?.normalizeDateValue?.(text, 'date') || '');
@@ -528,21 +528,30 @@
     // 选不成时收起自己点开的日历，表单里留原来的值。框失焦再点框能收起日历，但会把日历指着的日子交给表单，
     // 打过字就是打的那天（#301 评审在真组件上看到）。所以先把日历拨回原来的值再收：框里原来有字就写回去；
     // 原来是空的就点框里的清除按钮，真组件上它收起日历、表单里还是空的（写回空字会被读成 1901-01-01）。
-    // 没有清除按钮就只能照旧收起。
+    // 没有清除按钮，或点了没收起：在框上按 Esc，收起、不交给表单，框里留着打的字。
+    // 这样还开着才照旧失焦、点框收起：日历开着，下次点别处也会把它指着的日子交出去。
     async function jdyRestore(ctx, root, popup, original) {
       const doc = ctx.el.ownerDocument;
       const gone = () => !popup.isConnected || !visible(popup);
+      const settle = () => waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
       if (ctx.el.value !== original) {
-        const clear = !original && root.querySelector('.clear-icon');
         if (original) { write(ctx.el, original, ctx); input(ctx.el); }
-        else if (clear && !click(clear, ctx)) await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
+        else {
+          const clear = root.querySelector('.clear-icon');
+          if (clear && !click(clear, ctx)) await settle();
+          const View = doc.defaultView;
+          if (!gone() && !stop(ctx) && View?.KeyboardEvent) {
+            ctx.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+            await settle();
+          }
+        }
       }
       if (!gone() && !stop(ctx)) {
         blur(ctx.el);
         await delay(0);
-        if (!stop(ctx) && !click(root, ctx)) await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
+        if (!stop(ctx) && !click(root, ctx)) await settle();
       }
-      // 点清除按钮时框还有焦点，框里的字要等失焦才清掉。
+      // 点清除按钮、按 Esc 后框还有焦点，让它失焦；点了清除按钮的，框里的字要等失焦才清掉。
       if (!stop(ctx) && doc.activeElement === ctx.el) blur(ctx.el);
     }
     async function jdyPick(ctx, want, popup) {
