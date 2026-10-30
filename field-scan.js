@@ -235,7 +235,8 @@
     const pageEdge = el.closest("header, footer");
     if (pageEdge && !pageEdge.parentElement?.closest(CONTENT_SCOPE_SELECTOR)) return true;
     for (let node = el.parentElement; node && node.tagName !== "BODY"; node = node.parentElement) {
-      const tokens = [...classTokens(node), node.id || ""].map((token) => token.toLowerCase());
+      // #408 id 要读属性：表单里有 name 或 id 叫 id 的控件时，form.id 是那个控件（antd 把字段名写进 id）。
+      const tokens = [...classTokens(node), attr(node, "id")].map((token) => token.toLowerCase());
       if (tokens.some((token) => CHROME_TOKENS.has(token)) && !node.querySelector("form, [role='form']")) return true;
     }
     return false;
@@ -849,6 +850,8 @@
 
   const STRONG_SOURCES = new Set(["explicit", "item", "table", "table-header"]);
   const OFFERABLE_SOURCES = new Set(["explicit", "item", "item-text", "table", "table-header", "sibling"]);
+  // #408 判断「控件一个都没读出来」时不算数的跳过原因：读出错，以及本来就不填的页头、站内搜索、表单外和文件框。
+  const UNREADABLE_REASONS = new Set(["scanError", "pageChrome", "siteSearch", "outsideForm", "file"]);
 
   // --- 区块与重复条目 ---------------------------------------------------------
 
@@ -955,29 +958,37 @@
 
   function scanPage(doc, options = {}) {
     const ctx = makeContext(doc, options);
-    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, ambiguous: 0 };
+    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, scanError: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
       .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el));
     skipped.popup = allControls.filter((el) => isPopupInternal(el, ctx)).length;
 
     const controls = collectLogicalControls(ctx);
     const itemByRoot = new Map();
+    // #408 逐项跳过时第一个出错的原因：交给 content.js 按代码异常上报，不进诊断。
+    let fault = null;
     for (const control of controls) {
       skipped.merged += control.merged || 0;
-      if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
-      control.item = itemByRoot.get(control.root);
-      const resolved = resolveLabel(control, control.item, ctx);
-      control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
-      control.labelSource = resolved.source;
-      control.labelEl = resolved.labelEl;
-      control.tableRow = resolved.row || null;
-      control.question = resolved.question || null;
-      control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
-      control.chrome = isPageChrome(control.root);
-      // 禁用的控件和文件框只用来划分表单项边界，不填写。
-      const disabled = control.elements.every((el) => el.disabled);
-      control.fillable = control.controlKind !== "file" && !disabled && control.labelSource !== "none";
-      control.skipReason = control.controlKind === "file" ? "file" : disabled ? "disabled" : control.labelSource === "none" ? "noLabel" : "";
+      try {
+        if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
+        control.item = itemByRoot.get(control.root);
+        const resolved = resolveLabel(control, control.item, ctx);
+        control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
+        control.labelSource = resolved.source;
+        control.labelEl = resolved.labelEl;
+        control.tableRow = resolved.row || null;
+        control.question = resolved.question || null;
+        control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
+        control.chrome = isPageChrome(control.root);
+        // 禁用的控件和文件框只用来划分表单项边界，不填写。
+        const disabled = control.elements.every((el) => el.disabled);
+        control.fillable = control.controlKind !== "file" && !disabled && control.labelSource !== "none";
+        control.skipReason = control.controlKind === "file" ? "file" : disabled ? "disabled" : control.labelSource === "none" ? "noLabel" : "";
+      } catch (error) {
+        // #408 读这一项的题目时出错：只跳过它并计数，别的照常扫描。
+        if (!fault) fault = error;
+        Object.assign(control, { fillable: false, skipReason: "scanError", labelEl: null });
+      }
     }
 
     for (const control of controls) {
@@ -1005,13 +1016,26 @@
       if (control.skipReason && skipped[control.skipReason] !== undefined) skipped[control.skipReason] += 1;
     });
 
-    const kept = controls.filter((control) => control.fillable);
-    const claimed = new Set(kept.map((control) => control.labelEl).filter(Boolean));
-    kept.forEach((control) => {
-      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
-      control.section = found.text;
-      control.sectionRoot = found.root;
+    const claimed = new Set(controls.filter((control) => control.fillable).map((control) => control.labelEl).filter(Boolean));
+    controls.forEach((control) => {
+      if (!control.fillable) return;
+      try {
+        const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+        control.section = found.text;
+        control.sectionRoot = found.root;
+      } catch (error) {
+        // #408 找这一项所属区块时出错：同样只跳过它。题目已经读出来了，留在 claimed 里，别的项不会拿它当区块标题。
+        if (!fault) fault = error;
+        control.fillable = false;
+        control.skipReason = "scanError";
+        skipped.scanError += 1;
+      }
     });
+    const kept = controls.filter((control) => control.fillable);
+    // #408 控件一个都没读出来：出错的之外，只剩页头导航、站内搜索、表单外的控件和文件框（这些本来就不填）。
+    // 有读出来、只是禁用或对不上题目的控件时不算，没填的原因在它们身上。
+    const unreadable = Boolean(fault) && !kept.length
+      && controls.every((control) => UNREADABLE_REASONS.has(control.skipReason));
 
     // 同一区块里同名的题目（重复条目、表格多行）按页面顺序编号。
     const sameSlot = new Map();
@@ -1069,7 +1093,9 @@
     return {
       controls: kept.map(publicControl),
       skipped,
-      sources
+      sources,
+      fault,
+      unreadable
     };
   }
 
@@ -1176,24 +1202,34 @@
   // root 是 Document 或开放的 ShadowRoot。
   function outlineControls(root, options = {}) {
     const ctx = makeContext(root, options);
-    const controls = collectLogicalControls(ctx);
     const itemByRoot = new Map();
-    for (const control of controls) {
-      if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
-      control.item = itemByRoot.get(control.root);
-      const resolved = resolveLabel(control, control.item, ctx);
-      control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
-      control.labelSource = resolved.source;
-      control.labelEl = resolved.labelEl;
-      control.question = resolved.question || null;
-      control.disabled = control.elements.every((el) => el.disabled);
-      control.chrome = isPageChrome(control.root);
-      control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
-    }
+    // #408 和 scanPage 一样：哪一项读不出来就不列这一项，大纲照常生成。
+    const controls = collectLogicalControls(ctx).filter((control) => {
+      try {
+        if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
+        control.item = itemByRoot.get(control.root);
+        const resolved = resolveLabel(control, control.item, ctx);
+        control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
+        control.labelSource = resolved.source;
+        control.labelEl = resolved.labelEl;
+        control.question = resolved.question || null;
+        control.disabled = control.elements.every((el) => el.disabled);
+        control.chrome = isPageChrome(control.root);
+        control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     const claimed = new Set(controls.map((control) => control.labelEl).filter(Boolean));
-    return controls.map((control) => {
-      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
-      return {
+    return controls.flatMap((control) => {
+      let found;
+      try {
+        found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+      } catch {
+        return [];
+      }
+      return [{
         kind: control.kind,
         controlKind: control.controlKind,
         element: control.element,
@@ -1210,7 +1246,7 @@
         rangePart: control.rangePart || "",
         mixed: Boolean(control.mixed),
         placeholder: attr(control.element, "placeholder")
-      };
+      }];
     });
   }
 
