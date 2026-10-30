@@ -2624,6 +2624,15 @@
         return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
       });
 
+      // 等 AI 时字段所在的同源框架换了页或被删掉（#400）：和顶层换页一样算页面变了，不往旧文档里写。
+      const framesGone = () => {
+        for (const entry of fieldMap.values()) if (documentGone(entryDocument(entry))) return true;
+        return false;
+      };
+      if (framesGone()) {
+        cancelRequested = true;
+        throw new Error("已停止填写，页面或填写会话已变化。");
+      }
       const approvedValues = new Map();
       if (!assisted) {
         for (const match of sortedMatches) {
@@ -2707,7 +2716,7 @@
         }
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
-        && location.href === fillUrl && session === fillSession;
+        && location.href === fillUrl && session === fillSession && !framesGone();
       // 停下来时说清楚是用户按了停止，还是页面或填写会话变了。
       const stopError = () => {
         cancelRequested = true;
@@ -3695,6 +3704,11 @@
   function entryDocument(entry) {
     const node = entry?.binding?.item || entry?.element || entry?.elements?.[0];
     return docOf(node);
+  }
+
+  // 同源框架换了页或被删掉（#400）：旧文档没有 window 了，里面的元素 isConnected 却还是 true。
+  function documentGone(doc) {
+    return Boolean(doc) && doc !== document && !doc.defaultView;
   }
 
   // #269 页面重画后找回同一个字段：同一控件类型、同一区块、同一题目、同名题目的序号和总数都一样，并且只找到一个。

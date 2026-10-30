@@ -360,6 +360,42 @@ test("the zero-field wait rescans when a second-level frame that was already the
   assert.deepEqual(formState(next.window.document), FILLED);
 });
 
+// 等 AI 的时候装着表单的框架换了页或被删掉（Chromium 里两种情况一样：旧文档没有 window 了，旧元素的 isConnected 还是 true）。
+// 和顶层换页一样停下来，不往旧文档里写，也不把旧文档里的写入算作填上。
+function dropWindow(doc) {
+  Object.defineProperty(doc, "defaultView", { configurable: true, get: () => null });
+}
+
+test("a frame that leaves its page while the AI is matching stops the fill like a top-page change", async () => {
+  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: FORM } });
+  const old = page.frame("main");
+  const send = page.win.chrome.runtime.sendMessage;
+  page.win.chrome.runtime.sendMessage = async (message) => {
+    const reply = await send(message);
+    if (message.type === "AI_FILL") dropWindow(old);
+    return reply;
+  };
+  const result = await page.fill();
+  assert.equal(result.error, "已停止填写，页面或填写会话已变化。");
+  assert.equal(result.filledCount, 0);
+  assert.deepEqual(formState(old), EMPTY_FORM);
+  assert.deepEqual(page.reports, []);
+});
+
+test("a frame that leaves its page halfway through the fill stops it, and what went into the old page is not counted", async () => {
+  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: FORM } });
+  const old = page.frame("main");
+  // 姓名已经写好、核对过；选学历时框架换了页。
+  old.getElementById("xl").addEventListener("change", () => dropWindow(old));
+  const result = await page.fill();
+  // 正在写的控件被打断：和顶层这时换页一样，说「已停止填写，请核对网页。」
+  assert.equal(result.error, "已停止填写，请核对网页。");
+  assert.equal(old.getElementById("xm").value, "测试用户");
+  assert.equal(result.filledCount, 0);
+  assert.equal(old.getElementById("jl").value, "");
+  assert.deepEqual(page.reports, []);
+});
+
 // 页面结构那几行（自定义控件、只读或禁用输入框）和页面探测一样只算顶层：框架里扫到的北森式下拉不加进自定义控件，
 // 它的只读输入框也不从顶层的只读框里减掉。
 test("page-structure counts stay top-page only when the form with a generic select is in a frame", async () => {
