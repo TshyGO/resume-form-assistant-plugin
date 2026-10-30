@@ -185,12 +185,12 @@
     async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
-      // #399 #405 写之前由宿主按框的要求整理：日期框按占位提示的格式换写法，数字框只写能放心取出的数字，取不出就不写。
-      const prepared = shown || !deps.prepareText ? { value } : deps.prepareText(ctx.el, value);
+      // #399 #405 一键填写时，写之前由宿主按框的要求整理：日期框按占位提示的格式换写法，type=number 只写能放心取出的数字，取不出就不写。
+      const prepared = shown || !ctx.options.prepare || !deps.prepareText ? { value } : deps.prepareText(ctx.el, value);
       if (prepared.reason) return result(false, prepared.reason, ctx);
       if (prepared.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
-      const typed = String(prepared.value ?? '');
-      const expected = deps.normalizeText(ctx.el, typed);
+      let typed = String(prepared.value ?? '');
+      let expected = deps.normalizeText(ctx.el, typed);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
       if (!shown && !await deps.runTextLifecycle(ctx.el, typed, false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
@@ -223,6 +223,26 @@
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
+      }
+      // #405 inputmode 是数字的框照原样写了，页面没收下：改写能放心取出的数字（175cm → 175）；
+      // 取不出的（10k-15k）不留页面滤剩的字（1015），恢复原值，报只能填数字。
+      if (!verdict.ok && rejected(verdict.reason) && 'numeric' in prepared && guard()) {
+        if (prepared.numeric === null) {
+          if (String(ctx.el.value ?? '') !== previous) {
+            write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
+            ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return result(false, 'format_mismatch', ctx);
+        }
+        typed = prepared.numeric;
+        expected = deps.normalizeText(ctx.el, typed);
+        if (!await deps.runTextLifecycle(ctx.el, typed, false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
+        const committed = shows(ctx.el, expected);
+        await deps.waitTextCommit();
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
+        verdict = deps.inspectText(ctx.el, expected, committed);
+        after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
       }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
       if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, previous,

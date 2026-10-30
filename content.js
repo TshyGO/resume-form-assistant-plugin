@@ -2530,6 +2530,7 @@
         cancelButton.onclick = async () => {
           if (phase === 'fillMs') {
             writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            overlayWatch?.stop(true);
             if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
             showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
             return;
@@ -2728,6 +2729,8 @@
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
+      // 本次填写里为看弹层多等过的被拒文本框个数（最多 OVERLAY_WAITS 个）。
+      let overlayWaits = 0;
       let dayDefaulted = 0;
       // #301 新字段的去向：「加到我的信息」看 grownFields 和 grownMatchedIds；补填失败或没发出的进 grownMissed，
       // 状态行请用户自己补，并附上补填请求的警告。
@@ -2917,7 +2920,7 @@
             && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
           : null;
         const partnerBefore = partner ? fillValueSnapshot(partner) : null;
-        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
         stopInterruptedControl();
         // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
         // 内容和填写前一样（重建冲掉了这次写入）就在新字段上重做一次；显示的正是刚选的值就算填上；
@@ -2930,7 +2933,7 @@
             approvedValues.set(fresh, approved);
             fieldMap.set(match.fieldId, fresh);
             element = fresh;
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
           } else if (fresh && showsFilledValue(fresh, match.value)) {
             approvedValues.set(fresh, now);
@@ -2946,7 +2949,7 @@
           // 手机号框自己加了空格、短横的按数字比（#229），日期样式的文本框按年月日比（#399）。节点被页面替换的，都算未确认。
           filled = element.element.isConnected && (element.pickerType
             ? Boolean(controlOperator?.check(element)?.ok)
-            : sameTextValue(element.element, String(element.element.value ?? ""), expectedTextValue(element.element, match.value)));
+            : showsPreparedText(element.element, String(element.element.value ?? ""), match.value));
         }
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
@@ -2955,7 +2958,7 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
@@ -2971,8 +2974,12 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
-          // #399 #405 写入被拒的文本框：看满 1 秒有没有冒出弹层再填下一个，免得把下一个字段的弹层算到它头上。
-          if (!assisted && TEXT_REJECTED.has(textFillFailureCode(element))) await overlayWatches.get(element.element)?.settled;
+          // #399 #405 写入被拒的文本框：前 3 个看满 1 秒有没有冒出弹层再填下一个，免得把下一个字段的弹层算到它头上。
+          // 再往后的不等：下一个字段开始时停下，没看到弹层就不报。按停止时马上不等（见停止按钮）。
+          if (!assisted && TEXT_REJECTED.has(textFillFailureCode(element)) && overlayWaits < OVERLAY_WAITS) {
+            overlayWaits += 1;
+            await overlayWatches.get(element.element)?.settled;
+          }
           // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
           if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
@@ -3468,7 +3475,7 @@
       if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
       const shown = String(el.value ?? "");
       if (entry.pickerType || entry.controlKind === "date") return sameDateAsPage(shown, value);
-      return sameTextValue(el, shown, expectedTextValue(el, value));
+      return showsPreparedText(el, shown, value);
     } catch {
       return false;
     }
@@ -4358,7 +4365,7 @@
 
   // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
   // 就是写上了，不能当成没写上，也不能恢复成写之前的值。
-  const PHONE_HINT = /手机|电话|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
+  const PHONE_HINT = /手机|电话|联系方式|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
 
   function phoneDigits(text) {
     const digits = String(text ?? "").replace(/[\s-]/g, "").replace(/^\+86/, "").replace(/^86(?=1\d{10}$)/, "");
@@ -4434,8 +4441,10 @@
       const day = pattern[3] || pattern[5] || pattern[7];
       return { sep: pattern[4] ? "年" : pattern[1] || "", precision: day ? "day" : month ? "month" : "year", pad: !month || month.length === 2 };
     }
+    // 只给了示例的，框本身得是填日期的（题目、name 或占位提示里有日期、时间这类词），示例也得是一个真日期：
+    // 「期望月薪」的「如：2000.50」是金额。
     const examples = hint.match(/(?<!\d)(?:19|20)\d{2}(?:([-/.])\d{1,2}(?:\1\d{1,2})?|年\d{1,2}月(?:\d{1,2}日)?)(?!\d)/g) || [];
-    if (examples.length !== 1) {
+    if (examples.length !== 1 || !parseDateText(examples[0]) || !DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`)) {
       return null;
     }
     const example = /^\d{4}(?:([-/.])(\d{1,2})(?:\1(\d{1,2}))?|年(\d{1,2})月(?:(\d{1,2})日)?)$/.exec(examples[0]);
@@ -4513,28 +4522,33 @@
     return statedUnits(element).every((stated) => group.includes(stated)) ? number : null;
   }
 
-  // #399 #405 写之前按框的要求整理要写的字（控件层写之前调用）。返回 { value }，日期按 1 日补齐的带 dayDefaulted；
-  // 数字框里取不出数字的返回 { reason: "format_mismatch" }，不写。inputmode 只是给手机键盘的提示，
-  // 日期、证件号这类本来就由数字和分隔符组成的照旧写。
+  // #399 #405 一键填写写之前按框的要求整理要写的字（控件层写之前调用；侧栏、字段卡片手动写入不整理）。
+  // 返回 { value }，日期按 1 日补齐的带 dayDefaulted。type=number 里取不出数字的返回 { reason: "format_mismatch" }，不写。
+  // inputmode 只是给手机键盘的提示，很多框什么都收：先照原样写，numeric 是页面没收下时改写的数字（取不出是 null）。
   function prepareTextValue(element, value) {
     const text = String(value ?? "");
     if (!(element instanceof HTMLInputElement)) {
       return { value: text };
     }
-    const numeric = numericInputKind(element);
-    const plain = text.normalize("NFKC").trim();
-    if (numeric === "number" || (numeric === "mode" && !parseDateText(plain) && !/^\d{15}$|^\d{17}[\dxX]$/.test(plain))) {
-      const number = numericText(element, text);
-      return number === null ? { reason: "format_mismatch" } : { value: number };
-    }
     const format = datePlaceholderFormat(element);
-    return (format && formatDateText(text, format)) || { value: text };
+    const prepared = (format && formatDateText(text, format)) || { value: text };
+    const numeric = numericInputKind(element);
+    if (!numeric) {
+      return prepared;
+    }
+    const number = numericText(element, prepared.value);
+    if (numeric === "number") {
+      return number === null ? { reason: "format_mismatch" } : { ...prepared, value: number };
+    }
+    return number === prepared.value.normalize("NFKC").trim() ? prepared : { ...prepared, numeric: number };
   }
 
-  // 框里应当显示的字：按 prepareTextValue 整理过，再按输入框类型规整。
-  function expectedTextValue(element, value) {
+  // 框里显示的是不是一键填写写进去的字：按 prepareTextValue 整理过的，或 inputmode 数字框改写过的数字。
+  function showsPreparedText(element, shown, value) {
     const prepared = prepareTextValue(element, value);
-    return normalizeExpectedTextValue(element, prepared.reason ? value : prepared.value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    return sameTextValue(element, shown, normalizeExpectedTextValue(element, typed))
+      || (typeof prepared.numeric === "string" && sameTextValue(element, shown, prepared.numeric));
   }
 
   function inspectTextCommit(element, expected, committedBeforeWait) {
@@ -4629,6 +4643,8 @@
     + "[class*='picker-panel'], [class*='picker-dropdown'], [class*='picker-container'], [class*='calendar'], [class*='laydate'], "
     + "[class*='toast'], [class*='tooltip'], [class*='modal'], .el-message, .ant-message";
   let overlayWindowMs = 1000;
+  // 整页都写不上时不能每个框都多等 1 秒：只等前几个，诊断看这几个就够了。
+  const OVERLAY_WAITS = 3;
   let overlayWatch = null;
   const overlayWatches = new WeakMap();
 
@@ -4639,11 +4655,30 @@
     else textLeftovers.delete(control);
   }
 
+  const overlayWords = (element) => `${element.getAttribute?.("role") || ""} ${typeof element.className === "string" ? element.className : ""}`;
+  const isCalendarOverlay = (element) => /picker|calendar|date/i.test(overlayWords(element));
+
   // 日期面板、日历算别的弹层；下拉、联想建议算建议框。
   function overlayKind(element) {
-    const words = `${element.getAttribute?.("role") || ""} ${typeof element.className === "string" ? element.className : ""}`;
-    if (/picker|calendar|date/i.test(words)) return "other";
-    return /listbox|menu|tree|dropdown|suggest|autocomplete|select|option/i.test(words) ? "list" : "other";
+    if (isCalendarOverlay(element)) return "other";
+    return /listbox|menu|tree|dropdown|suggest|autocomplete|select|option/i.test(overlayWords(element)) ? "list" : "other";
+  }
+
+  // #399 简道云的日期框失焦后把 1998-06 显示成 1998-06-01，日历却不收起：要点日子或在别处按下鼠标，表单才收下。
+  // 框里只是年月日相同（被改写过）、这次弹出的日历过了收起动画的时间还开着，就不算写上。
+  let calendarCloseMs = 500;
+  async function calendarKeptOpen(watch, element, value) {
+    const prepared = prepareTextValue(element, value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    const shown = String(element.value ?? "");
+    if (shown === normalizeExpectedTextValue(element, typed) || !sameDateText(shown, typed) || !watch.calendarOpen()) {
+      return false;
+    }
+    for (let waited = 0; waited < calendarCloseMs; waited += 50) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      if (!watch.calendarOpen()) return false;
+    }
+    return true;
   }
 
   // 从开始填这个框起看 1 秒：结果是 list / other / none；没看完时 kind() 是 null。
@@ -4688,17 +4723,23 @@
     } catch {
       // 没有 MutationObserver 时只在结束时看一次。
     }
-    return { kind: () => kind, settled, stop };
+    const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
+    return { kind: () => kind, settled, stop, calendarOpen };
   }
 
-  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
+  // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
+  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite, { fill = false } = {}) {
     const control = target?.kind === 'element' ? target.element : target;
     // 文本框才看弹层；不等文字提交时（测试）不看。
     overlayWatch?.stop(true);
-    overlayWatch = textCommitWaitMs > 0 && control instanceof HTMLElement && !target?.pickerType
+    overlayWatch = fill && textCommitWaitMs > 0 && control instanceof HTMLElement && !target?.pickerType
       && !["custom-select", "cascader", "date", "date-picker"].includes(target?.controlKind) && isTextControl(control) ? watchOverlays(control) : null;
-    if (overlayWatch) overlayWatches.set(control, overlayWatch);
-    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
+    const watch = overlayWatch;
+    if (watch) overlayWatches.set(control, watch);
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
+    if (result.ok && watch && control instanceof HTMLInputElement && await calendarKeptOpen(watch, control, value)) {
+      result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
+    }
     if (control && typeof control === 'object') {
       rememberLeftover(control, result);
       if (result.ok) textFillFailures.delete(control);
@@ -7398,6 +7439,9 @@
       },
       setOverlayWindowMs(ms) {
         overlayWindowMs = ms;
+      },
+      setCalendarCloseMs(ms) {
+        calendarCloseMs = ms;
       },
       prepareTextValue,
       sameTextValue,

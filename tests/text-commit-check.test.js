@@ -1,8 +1,12 @@
 // #301 #399 #405 文本框写入后的核对和写入被拒时的诊断。
 // - 简道云的「出生年月」不是认得出的日期组件，按文本框填；组件失焦后按自己的格式改写（1998-06 → 1998-06-01）或清空，
 //   原来逐字比较报「值被页面退回」。像日期的文本框改为按年月日比较，占位提示写明格式时先按它换写法。
-// - 钉钉表单的数字框（type=number、inputmode=numeric）收到带单位的字被拒：能放心取出数字的写数字，取不出的报 format_mismatch。
+//   简道云那样失焦后日历还开着、要点日子才交给表单的，照旧算没写上。
+// - 钉钉表单的数字框收到带单位的字被拒：type=number 先取出能放心写的数字，取不出的报 format_mismatch；
+//   inputmode=numeric 只是键盘提示，先照原样写，页面没收下再这样处理。
 // - 写入被拒时诊断多带固定词：框里剩下的（after）、1 秒内有没有冒出弹层（overlay）、输入框的 inputmode。
+//   整页都写不上时只为前 3 个框多等，按停止马上停。
+// - 这些整理只用在一键填写上，侧栏和字段卡片的手动写入照原样写。
 // 按 manifest 的顺序在 jsdom 里加载全部 content script，页面组件的行为用事件处理函数模拟。夹具里只有虚构的值。
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -76,6 +80,8 @@ function page(t, body, resume = []) {
   // 页面自己的处理在 0 毫秒的定时器里，等 10 毫秒足够；弹层看 80 毫秒，测试不用等满 1 秒。
   helpers.setTextCommitWaitMs(10);
   helpers.setOverlayWindowMs?.(80);
+  // 日历收起动画按 200 毫秒等。
+  helpers.setCalendarCloseMs?.(200);
   const ui = { status: { textContent: "", className: "" }, diag: { value: "" }, cancel: { hidden: true, disabled: false, onclick: null },
     fill: { disabled: false, textContent: "" } };
   const parts = { "#resume-pro-status": ui.status, "#resume-pro-diagnostics": { hidden: true, open: false },
@@ -84,8 +90,9 @@ function page(t, body, resume = []) {
   const input = (id) => w.document.getElementById(id);
   return {
     w, doc: w.document, ui, reports, input,
-    // 单独填一个框：返回是否填上，原因码看 reason()。
-    set: (id, value) => helpers.setElementValue({ kind: "element", element: input(id), controlKind: "text" }, value),
+    // 按一键填写的方式单独填一个框：返回是否填上，原因码看 reason()。
+    set: (id, value) => helpers.setElementValue({ kind: "element", element: input(id), controlKind: "text" }, value,
+      undefined, undefined, undefined, { fill: true }),
     reason: (id) => helpers.textFillFailureReason(input(id)),
     run: () => helpers.handleAiFillClick({ currentTarget: ui.fill }),
     unfilledLine: () => (reports.at(-1) || "").split("\n").filter((line) => line.startsWith("- "))
@@ -187,6 +194,56 @@ test("#399 a later field's focus resetting an earlier date box is caught by the 
   assert.deepEqual(p.unfilledLine(), ["- 出生年月: input[text] after=empty reason=value_reverted"]);
 });
 
+test("#399 an amount example in the placeholder is not a date format: 2010.5 stays 2010.5", async (t) => {
+  const p = page(t, item("pay", "期望月薪", 'placeholder="如：2000.50"') + item("pay2", "期望月薪", 'placeholder="如：2010.5"'));
+  assert.equal(await p.set("pay", "2010.5"), true, p.reason("pay"));
+  assert.equal(p.input("pay").value, "2010.5");
+  assert.equal(await p.set("pay2", "2010.5"), true, p.reason("pay2"));
+  assert.equal(p.input("pay2").value, "2010.5");
+});
+
+// 简道云式日期框：聚焦弹出日历，失焦后把框里的字改写成 YYYY-MM-DD，日历不收起；表单的值要点日子或在别处按下鼠标才有。
+// closeAfterMs：失焦后过一会儿才收起（收起动画）；不给就一直开着。
+function calendarBox(p, id, { closeAfterMs = null } = {}) {
+  const el = p.input(id);
+  let popup = null;
+  el.addEventListener("focus", () => {
+    if (popup) return;
+    popup = p.doc.createElement("div");
+    popup.className = "x-popup x-datetime-content";
+    popup.innerHTML = "<div class='x-datepicker'></div>";
+    p.doc.body.append(popup);
+  });
+  el.addEventListener("blur", () => {
+    el.value = toIsoDay(el.value);
+    if (closeAfterMs !== null) setTimeout(() => { popup?.remove(); popup = null; }, closeAfterMs);
+  });
+}
+
+test("#399 a date box whose calendar stays open after blur is still a rejected write when only the same date is shown", async (t) => {
+  const p = page(t, item("birth", "出生年月") + item("start", "入学时间") + item("leave", "离校时间"));
+  calendarBox(p, "birth");
+  calendarBox(p, "start", { closeAfterMs: 0 });
+  calendarBox(p, "leave", { closeAfterMs: 80 });
+  // 日历还开着：框里显示 1998-06-01，可表单没收下，和原来一样报没写上。
+  assert.equal(await p.set("birth", "1998-06"), false);
+  assert.equal(p.reason("birth"), "value_reverted");
+  assert.equal(p.input("birth").value, "1998-06-01");
+  // 日历随失焦收起的，或收起动画放完就关上的，改写成同一天算写上。
+  assert.equal(await p.set("start", "2016-09"), true, p.reason("start"));
+  assert.equal(p.input("start").value, "2016-09-01");
+  assert.equal(await p.set("leave", "2020-06"), true, p.reason("leave"));
+  assert.equal(p.input("leave").value, "2020-06-01");
+});
+
+test("#399 the report for such a date box says the text was changed and a calendar came up", async (t) => {
+  const p = page(t, item("birth", "出生年月"), [["出生年月", "1998-06"]]);
+  calendarBox(p, "birth");
+  const result = await p.run();
+  assert.equal(result.filledCount, 0);
+  assert.deepEqual(p.unfilledLine(), ["- 出生年月: input[text] after=other overlay=other reason=value_reverted"]);
+});
+
 // ---- #405 数字框 ----
 
 test("#405 type=number: 175cm is written as 175; nothing safe to take out is not written at all", async (t) => {
@@ -212,6 +269,7 @@ test("#405 inputmode=numeric box that drops non-digits: 175cm goes in as 175, 10
 });
 
 test("#405 what counts as a number safe to take out", async (t) => {
+  // inputmode 的框照原样写，页面把数字以外的字滤掉了才取数字：这里的 inputmode 框都按这样的受控组件做。
   const cases = [
     // [题目, 属性, 资料, 写进去的；null 表示不写]
     ["身高", 'type="number"', "175 cm", "175"],
@@ -235,6 +293,9 @@ test("#405 what counts as a number safe to take out", async (t) => {
     ["专业排名", 'type="number"', "前10%", null]
   ];
   const p = page(t, cases.map(([label, attrs], index) => item(`f${index}`, label, attrs)).join(""));
+  for (const [index, [, attrs]] of cases.entries()) {
+    if (attrs.startsWith("inputmode")) controlled(p.input(`f${index}`), { onInput: (value) => value.replace(/[^\d.]/g, "") });
+  }
   for (const [index, [label, attrs, value, written]] of cases.entries()) {
     const ok = await p.set(`f${index}`, value);
     assert.equal(ok, written !== null, `${label} ${value}: ${p.reason(`f${index}`)}`);
@@ -256,8 +317,27 @@ test("#405 inputmode only hints the keyboard: a date or an ID number in such a b
   assert.equal(p.input("phone").value, "13800138000");
 });
 
+test("#405 inputmode boxes that take any text keep what main wrote: phone with dashes, letters, ranges, spaces", async (t) => {
+  const cases = [["联系方式", "138-0013-8000"], ["联系电话", "+86 13800138000"], ["学号", "2016A0123"], ["在校时间", "2016.09-2020.06"],
+    ["邮政编码", "100 080"], ["身高", "175cm"]];
+  const p = page(t, cases.map(([label], index) => item(`f${index}`, label, 'inputmode="numeric"')).join(""));
+  for (const [index, [label, value]] of cases.entries()) {
+    assert.equal(await p.set(`f${index}`, value), true, `${label}: ${p.reason(`f${index}`)}`);
+    assert.equal(p.input(`f${index}`).value, value, label);
+  }
+});
+
+test("#405 联系方式 in a box that keeps only digits counts as the same phone number", async (t) => {
+  // id、name 里没有 phone、tel 这类词，只靠题目认出是电话。
+  const p = page(t, item("contact", "联系方式", 'inputmode="numeric"'));
+  controlled(p.input("contact"), { onInput: (value) => value.replace(/\D/g, "") });
+  assert.equal(await p.set("contact", "138-0013-8000"), true, p.reason("contact"));
+  assert.equal(p.input("contact").value, "13800138000");
+});
+
 test("#405 the status names a number box it did not write", async (t) => {
   const p = page(t, item("salary", "期望薪资", 'inputmode="numeric"'), [["期望薪资", "10k-15k"]]);
+  controlled(p.input("salary"), { onInput: (value) => value.replace(/\D/g, "") });
   const result = await p.run();
   assert.equal(result.unfilledCount, 1);
   assert.equal(p.ui.status.textContent, "已填写 0 个字段。1 项没填上：期望薪资（只能填数字），请手动补上。");
@@ -314,6 +394,57 @@ test("a popup the next field opens is not put down to the box rejected before it
   });
   await p.run();
   assert.deepEqual(p.unfilledLine(), ["- 出生年月: input[text] after=empty overlay=none reason=value_reverted"]);
+});
+
+test("a page that refuses every text only holds up the first 3 boxes to watch for popups", async (t) => {
+  const labels = ["问题一", "问题二", "问题三", "问题四", "问题五", "问题六"];
+  const p = page(t, labels.map((label, index) => item(`f${index}`, label)).join(""), labels.map((label) => [label, "示例答案"]));
+  for (const index of labels.keys()) controlled(p.input(`f${index}`), { onBlur: () => "", async: true });
+  p.reports.length = 0;
+  await p.run();
+  // 前 3 个看满了窗口，没有弹层报 none；后面的到下一个字段开始就停，没看到弹层不报 overlay。
+  assert.deepEqual(p.unfilledLine().map((line) => line.replace(/^- [^:]+: /, "")), [
+    "input[text] after=empty overlay=none reason=value_reverted",
+    "input[text] after=empty overlay=none reason=value_reverted",
+    "input[text] after=empty overlay=none reason=value_reverted",
+    "input[text] after=empty reason=value_reverted",
+    "input[text] after=empty reason=value_reverted",
+    "input[text] after=empty reason=value_reverted"
+  ]);
+});
+
+test("pressing stop while a rejected box is being watched ends the fill at once", async (t) => {
+  const p = page(t, item("birth", "出生年月") + item("name", "姓名"), [["出生年月", "1998-06"], ["姓名", "张三"]]);
+  p.w.ResumeProHighlightTest.setOverlayWindowMs(5000);
+  controlled(p.input("birth"), { onBlur: () => "", async: true });
+  let stoppedAt = 0;
+  p.input("birth").addEventListener("blur", () => setTimeout(() => { stoppedAt = Date.now(); p.ui.cancel.onclick?.(); }, 50));
+  await p.run();
+  assert.ok(stoppedAt > 0, "stop was pressed");
+  assert.ok(Date.now() - stoppedAt < 1500, `stopped after ${Date.now() - stoppedAt}ms`);
+  assert.equal(p.input("name").value, "", "nothing written after stop");
+});
+
+// ---- 手动写入不整理 ----
+
+test("adding then removing a date chip by hand leaves the box empty, not -01", async (t) => {
+  const p = page(t, item("grad", "毕业时间", 'placeholder="YYYY-MM-DD"'));
+  const helpers = p.w.ResumeProHighlightTest;
+  const box = p.input("grad");
+  assert.equal(await helpers.applyChipValue(box, "2020-06", "add", { start: 0, end: 0 }), true);
+  assert.equal(box.value, "2020-06");
+  assert.equal(await helpers.applyChipValue(box, "2020-06", "remove", { start: 7, end: 7 }), true);
+  assert.equal(box.value, "");
+});
+
+test("a value put in by hand goes into a number-keyboard box as it is", async (t) => {
+  const p = page(t, item("phone", "联系电话", 'inputmode="numeric"') + item("height", "身高", 'type="number"'));
+  const helpers = p.w.ResumeProHighlightTest;
+  assert.equal(await helpers.setElementValue(p.input("phone"), "+86 13800138000"), true);
+  assert.equal(p.input("phone").value, "+86 13800138000");
+  // type=number 自己清掉写不进的字：手动写入不替用户取数字，照旧报没写上。
+  assert.equal(await helpers.setElementValue(p.input("height"), "175cm"), false);
+  assert.equal(helpers.textFillFailureReason(p.input("height")), "value_not_committed");
 });
 
 test("the allowlist keeps the new words and drops anything else a page could put there", () => {

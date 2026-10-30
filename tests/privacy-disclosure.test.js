@@ -72,7 +72,7 @@ test("the notice names what reports now carry, and when they are sent", () => {
   const ui = read("feedback-ui.js");
   const notice = ui.slice(ui.indexOf("const explanation"), ui.indexOf("if (compact && noticeRoot)"));
   for (const words of ["AI 请求失败", "安装方式", "从哪里开始填写", "网页当时是否在前台", "有没有弹出、里面有没有选项", "模型档位", "多久开始回复",
-    "没写上的输入框后来是空的还是被改了",
+    "没写上的输入框后来是空的还是被改了", "写入后有没有冒出建议框或别的弹层",
     "保存岗位的过程", "不含公司和岗位名"]) {
     assert.ok(notice.includes(words), words);
   }

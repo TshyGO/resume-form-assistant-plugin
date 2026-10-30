@@ -514,10 +514,8 @@ test("按浏览器规范化后的文本值判断提交，非法数字仍失败",
   assert.equal(email.value, "a@b.c");
   assert.equal(await setElementValue(area, "甲\r\n乙"), true);
   assert.equal(area.value, "甲\n乙");
-  // #405 取不出数字的不写，原因说清楚是格式不符。
   assert.equal(await setElementValue(number, "not a number"), false);
-  assert.equal(reason(number), "format_mismatch");
-  assert.equal(number.events.length, 0, "nothing was written or focused");
+  assert.equal(reason(number), "value_not_committed");
 });
 
 test("week、range、color 输入仍可沿用原有的直接写值路径", async () => {
