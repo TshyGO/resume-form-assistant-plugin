@@ -126,7 +126,7 @@
   const JOB_KEYS = /^job_/;
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
-    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui|jiandaoyun)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
   // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
@@ -240,7 +240,7 @@
   function labelSources(stats) {
     const sources = stats?.sources || {};
     const n = key => positive(sources[key]);
-    const counts = { explicit: n("explicit"), item: n("item") + n("item-text"), table: n("table") + n("table-header"),
+    const counts = { explicit: n("explicit"), item: n("item") + n("item-text") + n("item-part"), table: n("table") + n("table-header"),
       sibling: n("sibling"), placeholder: n("placeholder") };
     return LABEL_SOURCES.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }

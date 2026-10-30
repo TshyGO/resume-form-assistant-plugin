@@ -4585,7 +4585,7 @@
     }
 
     if (fieldEntry?.pickerType) {
-      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker']") || element];
+      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime") || element];
     }
 
     return [element];
@@ -5106,7 +5106,8 @@
   }
 
   function inferPickerInputType(container, inner) {
-    const cls = container.className || "";
+    // 简道云日期框的类名都带 datetime（x-datetime），说明不了格式，只看占位文字。
+    const cls = container.matches?.(".fx-form-datetime .x-datetime") ? "" : container.className || "";
     const placeholder = (inner.getAttribute("placeholder") || "").toLowerCase();
     if (/time/i.test(cls) || /时间|hh:mm/.test(placeholder)) return "time";
     if (/month/i.test(cls) || /年月|月份|month/.test(placeholder)) return "month";
