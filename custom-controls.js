@@ -4,6 +4,8 @@
   const ROOTS = '.ant-select, .ant-cascader, .el-select, .el-cascader, .arco-select, .arco-cascader, .layui-form-select';
   const SHELLS = '.ant-select-dropdown, .ant-cascader-dropdown, .el-select__popper, .el-select-dropdown, .el-cascader__dropdown, .arco-select-popup, .arco-cascader-popup, .arco-trigger-popup';
   const POPUPS = `${SHELLS}, [role="listbox"], [role="tree"]`;
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：选择器里的 .ant- 按节点所在文档的前缀展开。
+  const antd = (node, selector) => scope.ResumeProAntdPrefix?.css(node, selector) ?? selector;
   const trim = value => String(value ?? '').replace(/\s+/g, ' ').trim();
   function shown(node) {
     for(let current=node;current;current=current.parentElement){
@@ -93,7 +95,7 @@
       return false;
     };
     for (let current = node?.parentElement; current && current !== body; current = current.parentElement) {
-      if (current.matches(DIALOGS)) return current;
+      if (current.matches(antd(current, DIALOGS))) return current;
       const words = String(current.getAttribute('class') || '').split(/\s+/).map(dialogWord).filter(Boolean);
       if (words.some(word => !/drawer$/i.test(word)) || (words.length && floating(current))) return current;
     }
@@ -129,18 +131,18 @@
   function describe(target) {
     const el = target?.element || target;
     if (yuiBox(el)) return { el, root: target?.root || el, combo: el, library: 'yui', cascade: false, multiple: false };
-    const root = el?.closest?.(ROOTS) || target?.root || el;
-    let library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
+    const root = el?.closest?.(antd(el, ROOTS)) || target?.root || el;
+    let library = root?.matches?.(antd(root, '.ant-select, .ant-cascader')) ? 'antd'
       : root?.matches?.('.el-select, .el-cascader') ? 'element'
       : root?.matches?.('.arco-select, .arco-cascader') ? 'arco'
       : root?.matches?.('.layui-form-select') ? 'layui' : 'aria';
     if (library === 'aria' && root && !root.matches?.(ARIA_SIGNALS) && !el?.matches?.(ARIA_SIGNALS) && !root.querySelector?.(ARIA_SIGNALS)) library = 'generic';
     if (library === 'generic') return { el, root, combo: el, library, cascade: target?.controlKind === 'cascader', multiple: false };
-    const cascade = target?.controlKind === 'cascader' || root?.matches?.('.ant-cascader, .el-cascader, .arco-cascader');
+    const cascade = target?.controlKind === 'cascader' || root?.matches?.(antd(root, '.ant-cascader, .el-cascader, .arco-cascader'));
     const combo = root?.matches?.('[role="combobox"]') ? root : root?.querySelector?.('[role="combobox"]') || el;
     const multiple = combo?.getAttribute?.('aria-multiselectable') === 'true'
-      || root?.matches?.('.ant-select-multiple, .el-select--multiple, .arco-select-multiple')
-      || Boolean(root?.querySelector?.('.ant-select-selection-overflow, .ant-select-selection--multiple, .el-select__tags, .arco-select-view-tag'));
+      || root?.matches?.(antd(root, '.ant-select-multiple, .el-select--multiple, .arco-select-multiple'))
+      || Boolean(root?.querySelector?.(antd(root, '.ant-select-selection-overflow, .ant-select-selection--multiple, .el-select__tags, .arco-select-view-tag')));
     return { el, root, combo, library, cascade: Boolean(cascade), multiple: Boolean(multiple) };
   }
   // #269 联想输入框（智联学校名称、#299 51job 的 el-autocomplete）：本来就允许直接输入。
@@ -182,7 +184,7 @@
       return el.value ? null : [];
     }
     // AntD 3 和 ant-design-vue 1.x（大易 hotjob、B 站）把已选文字放在 selection-selected-value 里。
-    const selector = library === 'antd' ? '.ant-select-selection-item, .ant-select-selection-selected-value'
+    const selector = library === 'antd' ? antd(root, '.ant-select-selection-item, .ant-select-selection-selected-value')
       : library === 'element' ? '.el-select__selected-item:not(.el-select__input-wrapper):not(.is-transparent), .el-select__tags-text'
       : library === 'arco' ? '.arco-select-view-value, .arco-select-view-tag, .arco-cascader-view-value' : '';
     if (library === 'element' && cascade && (info.requireCascadeSignal || !el.readOnly)) {
@@ -222,9 +224,9 @@
     const info = describe(target), texts = selectedTexts(info);
     return texts === null ? null : { texts, cascade: info.cascade };
   }
-  function outerPopup(node) { return node?.closest?.(SHELLS) || node; }
+  function outerPopup(node) { return node?.closest?.(antd(node, SHELLS)) || node; }
   function popups(doc, visible) {
-    const all = Array.from(new Set(Array.from(doc.querySelectorAll(POPUPS), outerPopup))).filter(visible);
+    const all = Array.from(new Set(Array.from(doc.querySelectorAll(antd(doc, POPUPS)), outerPopup))).filter(visible);
     return all.filter(node => !all.some(other => other !== node && other.contains(node)));
   }
   function ownedPopup(info, visible) {
@@ -254,11 +256,11 @@
           return level === 0 ? !ancestor : ancestor === parent;
         });
       }
-      const columns = popup.querySelectorAll('.ant-cascader-menu, .el-cascader-menu, .arco-cascader-list, [role="group"]');
+      const columns = popup.querySelectorAll(antd(popup, '.ant-cascader-menu, .el-cascader-menu, .arco-cascader-list, [role="group"]'));
       const column = columns[level];
-      return column ? Array.from(column.querySelectorAll('.ant-cascader-menu-item, .el-cascader-node, .arco-cascader-list-item, [role="treeitem"], [role="option"]')) : [];
+      return column ? Array.from(column.querySelectorAll(antd(popup, '.ant-cascader-menu-item, .el-cascader-node, .arco-cascader-list-item, [role="treeitem"], [role="option"]'))) : [];
     }
-    const realSelector = info.library === 'antd' ? '.ant-select-item-option'
+    const realSelector = info.library === 'antd' ? antd(popup, '.ant-select-item-option')
       : info.library === 'element' ? '.el-select-dropdown__item'
       : info.library === 'arco' ? '.arco-select-option'
       : info.library === 'layui' ? 'dd:not(.layui-select-tips)' : '';
@@ -366,10 +368,10 @@
   }
   // AntD 3 / ant-design-vue 1.x 没有选项（还在加载）时把加载圈或「暂无数据」做成一个禁用的 role=option 条目，弹层带 --empty。
   function antdNotFound(popup, nodes) {
-    if (popup.matches('.ant-select-dropdown--empty')) return true;
+    if (popup.matches(antd(popup, '.ant-select-dropdown--empty'))) return true;
     const only = nodes.length === 1 ? nodes[0] : null, text = trim(only?.textContent);
-    return Boolean(only?.matches('[aria-disabled="true"], .ant-select-dropdown-menu-item-disabled')
-      && (only.querySelector('.ant-empty, .ant-spin') || !text || GENERIC_EMPTY.test(text)));
+    return Boolean(only?.matches(antd(only, '[aria-disabled="true"], .ant-select-dropdown-menu-item-disabled'))
+      && (only.querySelector(antd(only, '.ant-empty, .ant-spin')) || !text || GENERIC_EMPTY.test(text)));
   }
   // 列表周围的字（见 GENERIC_COUNTER）认弹层时照样算上：左侧还在加载时，点开后只看得到右侧这一栏。
   // 比对和诊断里的「有没有选项」不算它们，免得空列表算成有选项、和同名的真选项撞成歧义。
@@ -389,11 +391,11 @@
     // 这样的弹层还不是选项列表：按没有选项接着等。
     if (info.library === 'antd' && !info.cascade && antdNotFound(popup, nodes)) return [];
     return nodes.map(node => {
-      const label = node.querySelector('.ant-select-item-option-content, .el-cascader-node__label, .arco-cascader-list-item-label') || node;
+      const label = node.querySelector(antd(node, '.ant-select-item-option-content, .el-cascader-node__label, .arco-cascader-list-item-label')) || node;
       const text = info.library === 'aria' && info.cascade ? trim(node.getAttribute('aria-label') || Array.from(node.childNodes)
         .filter(child => child.nodeType !== 1 || !child.matches('[role="group"]')).map(child => child.textContent).join(' ')) : trim(label.textContent);
       return { node, text, value: node.getAttribute('data-value') ?? node.getAttribute('value') ?? text,
-        disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled') || Boolean(node.disabled) };
+        disabled: node.getAttribute('aria-disabled') === 'true' || node.matches(antd(node, '.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled')) || Boolean(node.disabled) };
     });
   }
   // #301 虚拟列表（antd 4/5 默认、Element Plus el-select-v2）只画出看得见的十来项，同名的一项可能还在屏外。
@@ -734,7 +736,7 @@
     };
     const initiallyOwned = ownedPopup(info, h.visible);
     const alreadyOpen = (info.combo.getAttribute('aria-expanded') === 'true' && initiallyOwned.popup) || layuiList();
-    const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector('.ant-select-selector') || info.root
+    const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector(antd(info.root, '.ant-select-selector')) || info.root
       : info.library === 'element' ? info.root.querySelector('.el-select__wrapper, .el-input') || info.root
       : info.library === 'arco' ? info.root.querySelector('.arco-select-view') || info.root : info.combo;
     if (!alreadyOpen) { const reason = h.click(info.library === 'generic' ? coverOf(trigger, info) || trigger : trigger, ctx); if (reason) return { reason }; }
@@ -774,7 +776,7 @@
     }
     let typedFirst = false, typedAt = 0;
     const typeInto = info.library === 'generic' || info.freeText ? info.el
-      : info.library === 'antd' && !info.cascade && !info.root.matches('.ant-select-auto-complete, .ant-select-combobox')
+      : info.library === 'antd' && !info.cascade && !info.root.matches(antd(info.root, '.ant-select-auto-complete, .ant-select-combobox'))
         ? Array.from(info.root.querySelectorAll('input')).find(input => safeSearch(input) && h.visible(input)) : null;
     if (typeInto && !dateWanted && opened.reason === 'verification_timeout' && safeSearch(typeInto) && h.visible(typeInto)) {
       const reason = h.stop(ctx, true); if (reason) return { reason };
@@ -809,7 +811,7 @@
     const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true || info.library === 'generic'
       || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
       || searchInput.getAttribute('role') === 'searchbox' || searchInput.type === 'search'
-      || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
+      || info.root.matches(antd(info.root, '.ant-select-show-search')) || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
     let searchDone = typedFirst;
     // 点选之前在弹层里见过的所有选项（搜索前后都算），两级选择的判断要用。
     const optionKey = option => option.full ?? option.text;
@@ -936,7 +938,7 @@
       info.pathNodes[level] = latest.option.node;
       const previousChildren = info.cascade ? readOptions(level + 1) : [];
       const parentActive = latest.option.node.getAttribute('aria-expanded') === 'true'
-        || latest.option.node.matches('.ant-cascader-menu-item-active, .el-cascader-node.is-active, .arco-cascader-list-item-active');
+        || latest.option.node.matches(antd(latest.option.node, '.ant-cascader-menu-item-active, .el-cascader-node.is-active, .arco-cascader-list-item-active'));
       // Some cascaders commit parent selections (changeOnSelect/checkStrictly).
       // Every path activation can change component state, even before the leaf.
       const activation = info.library === 'arco' && info.cascade

@@ -26,6 +26,10 @@
     return typeof Own === 'function' && Own !== Local && node instanceof Own;
   }
   const isInput = node => isA(node, 'HTMLInputElement');
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：选择器里的 .ant- 按节点所在文档的前缀展开，
+  // 查类名时换了前缀的也算。
+  const antd = (node, selector) => scope.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  const antdHas = (el, name) => scope.ResumeProAntdPrefix?.has(el, name) ?? Boolean(el?.classList?.contains(name));
 
   function create(deps = {}) {
     const helpers = deps.helpers || scope.ResumeProAIHelpers;
@@ -35,7 +39,7 @@
     const checks = new WeakMap();
     const timeoutMs = deps.timeoutMs ?? 2000;
     const visible = el => {
-      if (!el || el.isConnected === false || el.hidden || el.classList?.contains('ant-picker-dropdown-hidden')) return false;
+      if (!el || el.isConnected === false || el.hidden || antdHas(el, 'ant-picker-dropdown-hidden')) return false;
       if (deps.isVisible ? deps.isVisible(el) : !el.getBoundingClientRect || el.getBoundingClientRect().height > 0) return true;
       // Liepin's opening motion starts at scale(0): the rendered rect is empty,
       // while the mounted calendar already has layout and can commit selection.
@@ -72,7 +76,7 @@
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
         if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
-        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled')) return 'control_disabled';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches(antd(root, '.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled'))) return 'control_disabled';
       }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
@@ -115,7 +119,7 @@
     function click(el, ctx, committing = false) {
       const reason = stop(ctx, true);
       if (reason) return reason;
-      const disabled = () => el.disabled || Boolean(el.closest?.('[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled'));
+      const disabled = () => el.disabled || Boolean(el.closest?.(antd(el, '[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled')));
       if (disabled()) return 'control_disabled';
       // ARIA/component markup does not authorize form submission or reset.
       const submits = () => ['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)
@@ -388,7 +392,7 @@
         const direct = ['week', 'range', 'color'].includes(ctx.el.type);
         if (ctx.kind === 'date' && ctx.entry.pickerType === 'antd' && ctx.el.ownerDocument) {
           const doc = ctx.el.ownerDocument;
-          ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible));
+          ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible));
           ctx.alreadyOpen = doc.activeElement === ctx.el && ctx.popupsBefore.size === 1;
         }
         if (custom) ctx.popupsBeforeFocus = scope.ResumeProCustomControls.visiblePopups?.(ctx.entry, visible) || null;
@@ -509,10 +513,10 @@
     async function antDate(ctx, raw) {
       const doc = ctx.el.ownerDocument;
       if (!doc?.querySelectorAll) return { reason: 'unsupported_control' };
-      const before = ctx.popupsBefore || new Set(Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible));
+      const before = ctx.popupsBefore || new Set(Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible));
       const reason = click(ctx.el, ctx); if (reason) return { reason };
       const opened = await waitUntil(ctx, doc.documentElement, () => {
-        const all = Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible);
+        const all = Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible);
         const added = all.filter(node => !before.has(node));
         return added.length === 1 ? added[0] : ctx.alreadyOpen && all.length === 1 ? all[0] : null;
       }, popup => Boolean(popup));
@@ -535,49 +539,50 @@
       return picked;
     }
     async function antDatePick(ctx, raw, popup) {
-      if (popup.querySelectorAll('.ant-picker-panel').length !== 1) return { reason: 'unsupported_control' };
-      const mode = popup.querySelector('.ant-picker-month-panel') ? 'month' : popup.querySelector('.ant-picker-year-panel') ? 'year' : 'date';
+      const find = (node, selector) => node.querySelector(antd(node, selector));
+      if (popup.querySelectorAll(antd(popup, '.ant-picker-panel')).length !== 1) return { reason: 'unsupported_control' };
+      const mode = find(popup, '.ant-picker-month-panel') ? 'month' : find(popup, '.ant-picker-year-panel') ? 'year' : 'date';
       const expected = mode === 'year' ? String(raw).match(/^\s*(\d{4})(?:年|\b)/)?.[1] : helpers?.normalizeDateValue?.(raw, mode);
       if (!expected || !(mode === 'year' ? /^\d{4}$/ : mode === 'month' ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/).test(expected)) return { reason: 'invalid_date' };
       const year = Number(expected.slice(0, 4));
       if (year < 1900 || year > 2100) return { reason: 'invalid_date' };
       const take = async (node, committing = false) => {
-        if (!node || node.disabled || node.closest?.('.ant-picker-cell-disabled')) return 'no_option_match';
-        return click(node.querySelector?.('.ant-picker-cell-inner') || node, ctx, committing);
+        if (!node || node.disabled || node.closest?.(antd(node, '.ant-picker-cell-disabled'))) return 'no_option_match';
+        return click(node.querySelector?.(antd(node, '.ant-picker-cell-inner')) || node, ctx, committing);
       };
       if (mode !== 'year') {
-        const why = await take(popup.querySelector('.ant-picker-year-btn')); if (why) return { reason: why };
-        const panel = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-year-panel'), Boolean);
+        const why = await take(find(popup, '.ant-picker-year-btn')); if (why) return { reason: why };
+        const panel = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-year-panel'), Boolean);
         if (panel.reason) return { reason: panel.reason };
       }
       let selected = false;
       const started = now();
       for (let step = 0; step < 24 && now() - started < timeoutMs; step++) {
-        const panel = popup.querySelector('.ant-picker-year-panel');
+        const panel = find(popup, '.ant-picker-year-panel');
         if (!panel) return { reason: 'selection_not_committed' };
         const cell = panel.querySelector(`td[title="${year}"]`);
         if (cell) { const why = await take(cell, mode === 'year'); if (why) return { reason: why }; selected = true; break; }
         const years = Array.from(panel.querySelectorAll('td[title]')).map(node => Number(node.title)).filter(Number.isFinite);
         if (!years.length) return { reason: 'selection_not_committed' };
         const previous = panel.textContent;
-        const why = await take(panel.querySelector(year < Math.min(...years) ? '.ant-picker-header-super-prev-btn' : '.ant-picker-header-super-next-btn'));
+        const why = await take(find(panel, year < Math.min(...years) ? '.ant-picker-header-super-prev-btn' : '.ant-picker-header-super-next-btn'));
         if (why) return { reason: why };
         const changed = await waitUntil(ctx, popup, () => panel.textContent, text => text !== previous);
         if (changed.reason) return { reason: changed.reason };
       }
       if (!selected) return { reason: 'verification_timeout' };
       if (mode === 'year') return { expected, mode };
-      const leftYear = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-year-panel'), panel => !panel);
+      const leftYear = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-year-panel'), panel => !panel);
       if (leftYear.reason) return { reason: leftYear.reason };
-      if (mode === 'date' && !popup.querySelector('.ant-picker-month-panel')) {
-        const why = await take(popup.querySelector('.ant-picker-month-btn')); if (why) return { reason: why };
-        const month = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-month-panel'), Boolean);
+      if (mode === 'date' && !find(popup, '.ant-picker-month-panel')) {
+        const why = await take(find(popup, '.ant-picker-month-btn')); if (why) return { reason: why };
+        const month = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-month-panel'), Boolean);
         if (month.reason) return { reason: month.reason };
       }
-      const monthCell = popup.querySelector(`.ant-picker-month-panel td[title="${expected.slice(0, 7)}"]`);
+      const monthCell = find(popup, `.ant-picker-month-panel td[title="${expected.slice(0, 7)}"]`);
       const monthWhy = await take(monthCell, mode === 'month'); if (monthWhy) return { reason: monthWhy };
       if (mode === 'date') {
-        const day = await waitUntil(ctx, popup, () => popup.querySelector(`.ant-picker-date-panel td[title="${expected}"]`), Boolean);
+        const day = await waitUntil(ctx, popup, () => find(popup, `.ant-picker-date-panel td[title="${expected}"]`), Boolean);
         if (day.reason) return { reason: day.reason };
         const why = await take(day.value, true); if (why) return { reason: why };
       }

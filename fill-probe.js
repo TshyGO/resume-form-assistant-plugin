@@ -43,12 +43,15 @@
     return TOKEN.test(text) ? text : "";
   };
   const classTokens = el => (typeof el?.className === "string" ? el.className.split(/\s+/).filter(Boolean) : []);
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：类名换回 ant- 再认组件库，选择器里的 .ant- 按文档的前缀展开。
+  const antdToken = (node, name) => root.ResumeProAntdPrefix?.token(node, name) ?? name;
+  const custom = node => root.ResumeProAntdPrefix?.css(node, SELECTORS.custom) ?? SELECTORS.custom;
 
   // 控件本身和往上几层祖先里，第一个认得出的组件库前缀。只返回库名，不返回原始 class。
   function libraryOf(el) {
     for (let current = el, depth = 0; current && depth <= MAX_ANCESTORS; current = current.parentElement, depth += 1) {
       for (const name of classTokens(current)) {
-        const hit = LIBRARIES.find(([, pattern]) => pattern.test(name));
+        const hit = LIBRARIES.find(([, pattern]) => pattern.test(antdToken(current, name)));
         if (hit) return hit[0];
       }
     }
@@ -160,9 +163,9 @@
   function probePage(doc, { href = "" } = {}) {
     const byLibrary = {};
     let customTotal = 0;
-    for (const control of shown(doc.querySelectorAll(SELECTORS.custom))) {
+    for (const control of shown(doc.querySelectorAll(custom(doc)))) {
       // antd 下拉外壳里还套着 role=combobox 的输入框：只数最外层。
-      if (control.parentElement?.closest?.(SELECTORS.custom)) continue;
+      if (control.parentElement?.closest?.(custom(control))) continue;
       customTotal += 1;
       const library = libraryOf(control) || "其他";
       byLibrary[library] = (byLibrary[library] || 0) + 1;
@@ -175,7 +178,7 @@
       custom: { total: customTotal, byLibrary },
       editButtons: countEditControls(doc),
       // 只读的下拉输入框属于自定义控件，不算；禁用的输入框即使套在自定义控件里也照算。
-      locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => el.disabled || !el.closest?.(SELECTORS.custom)).length,
+      locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => el.disabled || !el.closest?.(custom(el))).length,
       shadowHosts: countShadowHosts(all),
       elements: all.length || 0
     };
@@ -184,7 +187,7 @@
   // 一键填写在通用路径上认出的自定义下拉（#301 北森）：不带组件库类名、也没有 ARIA 标记，probePage 数不到。
   // 只数和 probePage 数过的控件不重叠的（自己、祖先、里面都不像自定义控件），同一个控件不算两次。
   const uncounted = roots => new Set(Array.from(roots || []).filter(root => typeof root?.closest === "function"
-    && !root.closest(SELECTORS.custom) && !root.querySelector?.(SELECTORS.custom)));
+    && !root.closest(custom(root)) && !root.querySelector?.(custom(root))));
   function uncountedControls(roots) {
     return uncounted(roots).size;
   }
