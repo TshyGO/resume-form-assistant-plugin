@@ -4,6 +4,10 @@ use crate::{
     ai_data_root, archive_worker, commands::CommandError, evidence_commands, with_store, AppState,
 };
 use archive_store::{ApplicationFilter, ArchiveIdentity, MailKey, Occurred};
+use mailbox_sync::source::{
+    self, Cancellation, MessageLocator, Metadata, MetadataPage, MimeSource, PagedSource, Position,
+    SourceKind,
+};
 use mailbox_sync::{
     classify, imap, Account, Candidate, ConnectionConfig, Cursor, Database, Error, Header,
 };
@@ -28,6 +32,8 @@ pub fn fail(error: Error) -> CommandError {
         Error::TooLarge => "邮件或信头过大，未能读取。单封邮件上限 25 MiB，可改用截图或粘贴文本。",
         Error::Changed => "邮箱配置、邮件编号或当前档案已变化，未保存邮件。请立即检查后重新确认。",
         Error::Busy => "邮箱操作正在进行，请完成后再试。",
+        Error::UnsupportedSource => "无法识别此邮箱来源，已暂停检查。请检查是否需要升级桌面版本，或断开并移除此账号。",
+        Error::Cancelled => "邮箱操作已取消，可稍后重新检查或确认。",
         Error::Credentials => "系统凭据库暂时不可用或没有授权码，请解锁凭据库，或重新填写授权码并测试连接。",
     };
     CommandError {
@@ -37,6 +43,11 @@ pub fn fail(error: Error) -> CommandError {
 }
 fn mapped<T>(value: mailbox_sync::Result<T>) -> Result<T> {
     value.map_err(fail)
+}
+impl From<Error> for CommandError {
+    fn from(error: Error) -> Self {
+        fail(error)
+    }
 }
 fn database(state: &AppState) -> Result<Database> {
     mapped(Database::open(&ai_data_root(state)?))
@@ -82,6 +93,7 @@ pub struct View {
     pub accounts: Vec<Account>,
     pub candidates: Vec<Candidate>,
     pub pending_count: u32,
+    pub candidate_issues: u32,
 }
 fn view(state: &AppState, limit: u32) -> Result<View> {
     let db = database(state)?;
@@ -90,10 +102,12 @@ fn view(state: &AppState, limit: u32) -> Result<View> {
     for account in &mut accounts {
         account.header_issues = mapped(db.header_issue_count(&current.archive_id, &account.id))?;
     }
+    let pending = mapped(db.pending_with_issues(&current.archive_id, limit))?;
     Ok(View {
         accounts,
-        candidates: mapped(db.pending(&current.archive_id, limit))?,
-        pending_count: mapped(db.pending_count(&current.archive_id))?,
+        candidates: pending.candidates,
+        pending_count: pending.pending_count,
+        candidate_issues: pending.invalid_count,
     })
 }
 
@@ -149,7 +163,7 @@ fn persist_configured_account(
 ) -> Result<()> {
     let existing = mapped(db.accounts())?
         .into_iter()
-        .find(|a| a.email == email);
+        .find(|a| a.email == email && a.source == SourceKind::Imap);
     let id = existing
         .as_ref()
         .map(|a| a.id.clone())
@@ -208,7 +222,10 @@ fn companies(state: &AppState, expected: &ArchiveIdentity) -> Result<Vec<String>
 }
 fn check_connection(db: &Database, expected: &Account) -> Result<()> {
     let current = mapped(db.account(&expected.id))?;
-    if current.connection != expected.connection {
+    if current.connection != expected.connection
+        || current.source != expected.source
+        || current.source_account_id != expected.source_account_id
+    {
         return Err(fail(Error::Changed));
     }
     Ok(())
@@ -234,6 +251,116 @@ fn matched_header(
     })?;
     Ok((!exists).then_some((header, reasons)))
 }
+/// Caller holds the short archive/restore lock, after network has completed.
+fn persist_source_page(
+    store: &archive_store::ArchiveStore,
+    db: &mut Database,
+    expected: &ArchiveIdentity,
+    account: &Account,
+    scope: &str,
+    page: MetadataPage,
+    companies: &[String],
+) -> Result<()> {
+    check_identity(store, expected)?;
+    check_connection(db, account)?;
+    let mut found = Vec::new();
+    for message in page.messages {
+        let reasons = classify(&message.header, companies);
+        if reasons.is_empty() {
+            continue;
+        }
+        let exists = key(&message.header)
+            .map(|key| store.find_known_mail(&key))
+            .transpose()?
+            .flatten()
+            .is_some();
+        if !exists {
+            found.push((message, reasons));
+        }
+    }
+    mapped(db.commit_metadata(&expected.archive_id, &account.id, scope, &page.next, &found))
+}
+
+/// Entry point for Graph/Gmail adapters supplied by their connector tasks. The
+/// existing IMAP scanner keeps its folder recovery and persistent UID retries.
+#[allow(dead_code)] // No live API connector is installed until #354/#355/#360.
+async fn scan_api_page(
+    state: &AppState,
+    db: &mut Database,
+    expected: &ArchiveIdentity,
+    account: &Account,
+    scope: &str,
+    companies: &[String],
+    source: &mut impl PagedSource,
+    cancellation: &Cancellation,
+) -> Result<bool> {
+    if account.source == SourceKind::Unknown {
+        return Err(fail(Error::UnsupportedSource));
+    }
+    if source.kind() != account.source || source.account_id() != account.id {
+        return Err(fail(Error::Changed));
+    }
+    let position = mapped(db.source_position(&expected.archive_id, &account.id, scope))?;
+    source::scan_page(source, scope, position.as_ref(), cancellation, |page| {
+        with_store(state, |store| {
+            mapped(cancellation.check())?;
+            persist_source_page(store, db, expected, account, scope, page, companies)
+        })
+    })
+    .await
+}
+
+/// Production confirmation entry shared by IMAP and future API connectors.
+/// All local preparation/commits use the archive lock; network work never does.
+async fn confirm_candidate_from_source(
+    state: &AppState,
+    db: &Database,
+    expected: &ArchiveIdentity,
+    account: &Account,
+    id: &str,
+    source: &mut impl MimeSource,
+    cancellation: &Cancellation,
+) -> Result<bool> {
+    mapped(cancellation.check())?;
+    if account.source == SourceKind::Unknown {
+        return Err(fail(Error::UnsupportedSource));
+    }
+    if source.kind() != account.source || source.account_id() != account.id {
+        return Err(fail(Error::Changed));
+    }
+    let item = with_store(state, |store| {
+        check_identity(store, expected)?;
+        check_connection(db, account)?;
+        if mapped(db.candidate(&expected.archive_id, id))?.account_id != account.id {
+            return Err(fail(Error::Changed));
+        }
+        prepare_candidate(store, db, expected, id)
+    })?;
+    let Some(item) = item else {
+        return Ok(true);
+    };
+    confirm_from_source(source, &item, cancellation, |bytes| {
+        with_store(state, |store| {
+            mapped(cancellation.check())?;
+            check_connection(db, account)?;
+            persist_confirmed(store, db, expected, id, bytes)
+        })
+    })
+    .await
+}
+
+async fn confirm_from_source(
+    source: &mut impl MimeSource,
+    item: &Candidate,
+    cancellation: &Cancellation,
+    persist: impl FnOnce(&[u8]) -> Result<bool>,
+) -> Result<bool> {
+    mapped(cancellation.check())?;
+    let bytes = mapped(cancellation.run(source::confirmed_mime(source, item)).await)?;
+    mapped(cancellation.check())?;
+    persist(&bytes)
+}
+
 async fn scan_folder(
     state: &AppState,
     db: &mut Database,
@@ -345,31 +472,33 @@ async fn scan_folder(
                 ))?;
                 partial = true;
             }
-            let mut found = Vec::new();
-            for (uid, header) in batch.headers {
-                let reasons = classify(&header, companies);
-                if reasons.is_empty() {
-                    continue;
-                }
-                let exists = key(&header)
-                    .map(|key| store.find_known_mail(&key))
-                    .transpose()?
-                    .flatten()
-                    .is_some();
-                if !exists {
-                    found.push((uid, header, reasons));
-                }
-            }
-            mapped(db.commit_scan(
-                &expected.archive_id,
-                &account.id,
+            persist_source_page(
+                store,
+                db,
+                expected,
+                account,
                 folder,
-                Cursor {
-                    validity: plan.validity,
-                    uid: *chunk.last().unwrap(),
+                MetadataPage {
+                    messages: batch
+                        .headers
+                        .into_iter()
+                        .map(|(uid, header)| Metadata {
+                            locator: MessageLocator::Imap {
+                                folder: folder.into(),
+                                validity: plan.validity,
+                                uid,
+                            },
+                            header,
+                        })
+                        .collect(),
+                    next: Position::Imap(Cursor {
+                        validity: plan.validity,
+                        uid: *chunk.last().unwrap(),
+                    }),
+                    has_more: false,
                 },
-                &found,
-            ))
+                companies,
+            )
         })?;
     }
     // Includes empty scans and expunged gaps, bounded by UIDNEXT snapshot.
@@ -397,6 +526,9 @@ fn scan_account(
     account: &Account,
     companies: &[String],
 ) -> Result<bool> {
+    if account.source != SourceKind::Imap {
+        return Err(fail(Error::OAuthRequired));
+    }
     let secret = state
         .credentials
         .get_key(&account.credential_id())
@@ -514,7 +646,9 @@ fn run_checks(
                 }
             }
             Err(error) => {
-                if error.code == fail(Error::Changed).code {
+                if error.code == fail(Error::Changed).code
+                    || error.code == fail(Error::Cancelled).code
+                {
                     return Err(error);
                 }
                 let category = [
@@ -527,6 +661,7 @@ fn run_checks(
                     Error::TooLarge,
                     Error::Credentials,
                     Error::EndpointConfirmation,
+                    Error::OAuthRequired,
                 ]
                 .into_iter()
                 .find(|category| fail(*category).code == error.code)
@@ -588,21 +723,24 @@ fn prepare_confirm(
     expected: &ArchiveIdentity,
     id: &str,
 ) -> Result<Option<Candidate>> {
+    with_store(state, |store| prepare_candidate(store, db, expected, id))
+}
+fn prepare_candidate(
+    store: &archive_store::ArchiveStore,
+    db: &Database,
+    expected: &ArchiveIdentity,
+    id: &str,
+) -> Result<Option<Candidate>> {
+    check_identity(store, expected)?;
     let item = mapped(db.candidate(&expected.archive_id, id))?;
-    // It may have been manually imported since discovery; skip the download too.
-    let duplicate = with_store(state, |store| {
-        check_identity(store, expected)?;
-        Ok(key(&item.header)
-            .map(|key| store.find_known_mail(&key))
-            .transpose()?
-            .flatten()
-            .is_some())
-    })?;
+    // A manual/web import after discovery also skips the MIME download.
+    let duplicate = key(&item.header)
+        .map(|key| store.find_known_mail(&key))
+        .transpose()?
+        .flatten()
+        .is_some();
     if duplicate {
-        with_store(state, |store| {
-            check_identity(store, expected)?;
-            mapped(db.finish(&expected.archive_id, &[id.into()], false)).map(|_| ())
-        })?;
+        mapped(db.finish(&expected.archive_id, &[id.into()], false))?;
         return Ok(None);
     }
     Ok(Some(item))
@@ -652,6 +790,12 @@ async fn confirm_many(
                 continue;
             }
         };
+        if account.source != SourceKind::Imap {
+            for (id, _) in candidates {
+                confirm_failure(&mut report, id, fail(Error::OAuthRequired));
+            }
+            continue;
+        }
         let secret = match state
             .credentials
             .get_key(&account.credential_id())
@@ -679,7 +823,7 @@ async fn confirm_many(
         let mut remaining: VecDeque<_> = candidates.into();
         let mut reconnect_used = false;
         let mut connection_error = fail(Error::Network);
-        while let Some((id, item)) = remaining.pop_front() {
+        while let Some((id, _item)) = remaining.pop_front() {
             if session.is_none() {
                 if reconnect_used {
                     confirm_failure(&mut report, id, connection_error.clone());
@@ -701,20 +845,29 @@ async fn confirm_many(
                     }
                 }
             }
-            let download =
-                imap::download(session.as_mut().expect("session established"), &item).await;
-            match download {
-                Ok(bytes) => match with_store(state, |store| {
-                    check_connection(db, &account)?;
-                    persist_confirmed(store, db, expected, &id, &bytes)
-                }) {
-                    Ok(true) => report.duplicates += 1,
-                    Ok(false) => report.imported += 1,
-                    Err(error) => confirm_failure(&mut report, id, error),
-                },
+            // IMAP has no user-facing cancel command in this change. Its
+            // existing session lifecycle stays intact; future API operations
+            // can supply a shared cancellation token to the common entry.
+            let cancellation = Cancellation::default();
+            let result = confirm_candidate_from_source(
+                state,
+                db,
+                expected,
+                &account,
+                &id,
+                &mut source::ImapSource(
+                    session.as_mut().expect("session established"),
+                    &account.id,
+                ),
+                &cancellation,
+            )
+            .await;
+            match result {
+                Ok(true) => report.duplicates += 1,
+                Ok(false) => report.imported += 1,
                 Err(error) => {
-                    let reconnect = matches!(error, Error::Network | Error::Protocol);
-                    let error = fail(error);
+                    let reconnect = error.code == fail(Error::Network).code
+                        || error.code == fail(Error::Protocol).code;
                     confirm_failure(&mut report, id, error.clone());
                     if reconnect {
                         session = None;
@@ -887,7 +1040,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path()).unwrap();
         let old = db.save_account("a", "a@qq.com").unwrap();
-        let mut changed = old.connection.clone();
+        let mut changed = old.connection.clone().unwrap();
         changed.host = "imap.school.example".into();
         db.save_configured_account("a", &old.email, &changed)
             .unwrap();
@@ -918,7 +1071,7 @@ mod tests {
             .unwrap();
         let updated = db.accounts().unwrap().remove(0);
         assert_eq!(original.id, updated.id);
-        assert_eq!(updated.connection, config);
+        assert_eq!(updated.connection, Some(config));
         assert_eq!(
             creds.get_key(&updated.credential_id()).unwrap().as_deref(),
             Some("updated-secret")
@@ -1207,6 +1360,33 @@ mod tests {
             &[(2, Header::parse(&mail()), vec!["Interview".into()])],
         )
         .unwrap();
+        db.save_api_account(
+            "api-account",
+            "private@outlook.com",
+            SourceKind::MicrosoftGraph,
+            "private-tenant:private-person",
+        )
+        .unwrap();
+        db.commit_metadata(
+            &store.identity().archive_id,
+            "api-account",
+            "inbox",
+            &Position::Api {
+                source: SourceKind::MicrosoftGraph,
+                cursor: "private-delta-checkpoint".into(),
+            },
+            &[(
+                Metadata {
+                    locator: MessageLocator::Api {
+                        source: SourceKind::MicrosoftGraph,
+                        message_id: "private-source-message".into(),
+                    },
+                    header: Header::parse(&mail()),
+                },
+                vec!["Interview".into()],
+            )],
+        )
+        .unwrap();
         let output = dir.path().join("backup.zip");
         let export = crate::restore::RestorePaths {
             data_root: paths.data_root.clone(),
@@ -1222,7 +1402,16 @@ mod tests {
             .iter()
             .all(|e| !e.path.contains("mailbox")));
         let diagnostics = data_service::diagnostics_from(&paths, true, &[]).to_string();
-        assert!(!diagnostics.contains("private@qq.com") && !diagnostics.contains("Interview"));
+        for private in [
+            "private@qq.com",
+            "private@outlook.com",
+            "Interview",
+            "private-tenant",
+            "private-source-message",
+            "private-delta-checkpoint",
+        ] {
+            assert!(!diagnostics.contains(private));
+        }
     }
 }
 
@@ -1241,3 +1430,7 @@ pub async fn mailbox_open_help(app: AppHandle, url: String) -> Result<()> {
         .open_url(url, None::<&str>)
         .map_err(|_| fail(Error::Network))
 }
+
+#[cfg(test)]
+#[path = "mailbox_source_tests.rs"]
+mod source_tests;

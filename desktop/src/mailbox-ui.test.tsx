@@ -637,3 +637,92 @@ test("saved acceptance is restored only for the same destination", async () => {
   fireEvent.input(el("mailbox-host"), { target: { value: "mail.changed.example" } });
   expect(el("mailbox-endpoint-review").hidden).toBe(false);
 });
+
+test("damaged candidate counts stay visible while healthy candidates can be processed", async () => {
+  const { ui, view, handlers } = setup();
+  view.candidateIssues = 2;
+  await ui.refresh();
+  fireEvent.click(el("mailbox-tab-pending"));
+  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录异常");
+  expect(el("mailbox-discovery-note").textContent).toContain("未删除");
+  expect(el("mailbox-pending-count").textContent).toBe("1");
+  expect(el("mailbox-load-more").hidden).toBe(true);
+  handlers.mailbox_confirm = async () => {
+    view.candidates = []; view.pendingCount = 0;
+    return { imported: 1, duplicates: 0, failed: [] };
+  };
+  fireEvent.click(within(el("mailbox-candidates")).getByRole("button", { name: "存进档案" }));
+  await waitFor(() => expect(el("mailbox-pending-count").textContent).toBe("0"));
+  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录异常");
+  expect(el("mailbox-load-more").hidden).toBe(true);
+  view.candidateIssues = 0; await ui.refresh();
+  expect(el("mailbox-discovery-note").textContent).not.toContain("候选记录异常");
+});
+
+test("only damaged candidates produce a warning without fake pending actions or pagination", async () => {
+  const { ui, view } = setup([]); view.candidateIssues = 3;
+  await ui.refresh(); fireEvent.click(el("mailbox-tab-pending"));
+  expect(el("mailbox-pending-count").textContent).toBe("0");
+  expect(el("mailbox-discovery-note").textContent).toContain("3 条候选记录异常");
+  expect(el("mailbox-discovery-note").textContent).toContain("手动导入");
+  expect(el("mailbox-pending-actions").hidden).toBe(true);
+  expect(el("mailbox-load-more").hidden).toBe(true);
+});
+
+test("damaged account configuration shows repair guidance and keeps account controls available", async () => {
+  const { ui, view } = setup();
+  view.accounts[0].connection = null;
+  view.accounts[0].paused = true;
+  view.accounts[0].lastError = "Configuration";
+  await ui.refresh();
+  const accounts = within(el("mailbox-accounts"));
+  expect(el("mailbox-accounts").textContent).toContain("本机邮箱连接配置无法读取或已失效");
+  expect(accounts.getByRole("button", { name: "修改连接 / 更新凭据" })).toBeTruthy();
+  expect(accounts.getByRole("button", { name: "断开并移除" })).toBeTruthy();
+  expect(el("mailbox-candidates").textContent).toContain("星河科技面试邀请");
+});
+
+test("unknown sources show upgrade guidance and only allow disconnect instead of guessing a connection", async () => {
+  const { ui, view, handlers, invoke } = setup();
+  view.accounts[0].source = "unknown";
+  view.accounts[0].connection = null;
+  view.accounts[0].paused = true;
+  view.accounts[0].lastError = "UnsupportedSource";
+  await ui.refresh();
+  const accounts = within(el("mailbox-accounts"));
+  expect(el("mailbox-accounts").textContent).toContain("无法识别此邮箱来源");
+  expect(el("mailbox-accounts").textContent).toContain("升级桌面版本");
+  expect(accounts.queryByRole("button", { name: "恢复检查" })).toBeNull();
+  expect(accounts.queryByRole("button", { name: "修改连接 / 更新凭据" })).toBeNull();
+  handlers.mailbox_delete = async () => { view.accounts = []; };
+  fireEvent.click(accounts.getByRole("button", { name: "断开并移除" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_delete", { id: "account" }));
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_connect" || name === "mailbox_check")).toBe(false);
+});
+
+test("damaged IMAP settings require repair before pause controls are offered again", async () => {
+  const { ui, view, invoke } = setup();
+  const account = view.accounts[0];
+  account.source = "imap"; account.connection = null; account.paused = true; account.lastError = "Configuration";
+  await ui.refresh();
+  const accounts = within(el("mailbox-accounts"));
+  expect(accounts.queryByRole("button", { name: "恢复检查" })).toBeNull();
+  expect(el("mailbox-accounts").textContent).toContain("重新测试并保存成功后再检查");
+  fireEvent.click(accounts.getByRole("button", { name: "修改连接 / 更新凭据" }));
+  expect(el("mailbox-progress-title").textContent).toContain("原连接配置无法读取");
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_pause" || name === "mailbox_check")).toBe(false);
+  account.connection = { host: "imap.qq.com", port: 993, encryption: "tls", username: "a@qq.com", sendId: false };
+  account.paused = false; account.lastError = null;
+  await ui.refresh();
+  expect(within(el("mailbox-accounts")).getByRole("button", { name: "暂停检查" })).toBeTruthy();
+});
+
+test("a temporarily busy refresh preserves the existing pending list", async () => {
+  const { ui, handlers } = setup();
+  await ui.refresh();
+  handlers.mailbox_view = async () => { throw { code: "MAILBOX_BUSY", message: "邮箱操作正在进行，请稍后重试。" }; };
+  await ui.refresh();
+  expect(el("mailbox-candidates").textContent).toContain("星河科技面试邀请");
+  expect(el("mailbox-pending-count").textContent).toBe("1");
+  expect(el("mailbox-inbox-status").textContent).toContain("稍后重试");
+});

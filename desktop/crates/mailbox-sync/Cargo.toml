@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
-tokio = { version = "1", features = ["net", "time", "io-util"] }
+tokio = { version = "1", features = ["net", "time", "io-util", "sync", "macros"] }
 tokio-native-tls = "0.3"
 futures-util = "0.3"
 base64 = "0.22"
