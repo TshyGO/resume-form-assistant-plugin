@@ -422,6 +422,56 @@ test("person scope: family and emergency numbers stay with their own person and 
   });
 });
 
+// 合并后模板字段排在「我的信息」前面：模板里的微信、QQ、学号、准考证号不能顶替「我的信息」里的手机和证件号码。
+test("rules: other numbers in the template do not stand in for the profile's mobile and ID number", () => {
+  const profile = require("../profile-fields.js");
+  const mine = profile.profileToResumeFields({ values: { phone: "13800138000", idNumber: "110101199003071234" } });
+  const forms = [textField("name", "姓名"), textField("phone", "手机号码"), textField("id", "证件号码"), textField("mail", "邮箱")];
+  for (const other of [
+    { key: "微信", value: "13911112222" },
+    { key: "QQ", value: "123456789" },
+    { key: "学号", value: "2019123456" },
+    { key: "准考证号", value: "110105123456" }
+  ]) {
+    const resume = profile.mergeResumeFields([
+      { group: "基本信息", key: "姓名", value: "测试用户" },
+      { group: "基本信息", ...other },
+      { group: "基本信息", key: "邮箱", value: "tester@example.com" }
+    ], mine);
+
+    assert.deepEqual(ruleValues(forms, resume),
+      { name: "测试用户", phone: "13800138000", id: "110101199003071234", mail: "tester@example.com" }, other.key);
+  }
+});
+
+// 英文简历的出生日期常写成 DOB：整个字段名是 DOB、D.O.B.、Born 才算，Adobe 不算；排在电话前也不进手机框。
+test("rules: a DOB key fills the birth date and is not taken for the phone", () => {
+  for (const key of ["DOB", "D.O.B.", "Born"]) {
+    const byId = ruleValues(
+      [textField("phone", "手机号码"), textField("birth", "出生日期"), textField("mail", "邮箱")],
+      [
+        { group: "Basic", key: "Adobe 认证", value: "2022.03" },
+        { group: "Basic", key, value: "2001-05-07" },
+        { group: "Basic", key: "Tel", value: "13800138000" },
+        { group: "Basic", key: "E-mail", value: "tester@example.com" }
+      ]
+    );
+
+    assert.deepEqual(byId, { phone: "13800138000", birth: "2001-05-07", mail: "tester@example.com" }, key);
+  }
+});
+
+// 性别按值猜时整个值要像性别：模板里带「女」字的经历描述排在「我的信息」的性别前面，也不进性别框。
+test("rules: a description that mentions 女 is not taken for the gender", () => {
+  const profile = require("../profile-fields.js");
+  const resume = profile.mergeResumeFields([
+    { group: "基本信息", key: "姓名", value: "测试用户" },
+    { group: "实习经历", key: "示例服饰实习经历-工作内容", value: "负责女装线上店铺的商品上新" }
+  ], profile.profileToResumeFields({ values: { gender: "女" } }));
+
+  assert.deepEqual(ruleValues([textField("name", "姓名"), textField("gender", "性别")], resume), { name: "测试用户", gender: "女" });
+});
+
 // 以前证件类型、学历、学位、年月这类下拉框被挡在 AI 外面，本地规则又不处理，永远填不上。
 test("worker: choice fields the rules cannot fill are sent to AI with their options", async () => {
   let body = null;

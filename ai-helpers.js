@@ -27,6 +27,10 @@
     { type: "school", keywords: ["学校", "院校", "大学", "学院", "school", "university"] },
     { type: "degree", keywords: ["学历", "学位", "培养层次", "degree"] }
   ];
+  // 关键词先 normalize 好：本地匹配里每一对网页字段和简历字段都要查这张表。
+  const SEMANTIC_KEYWORDS = FIELD_SEMANTICS.map((item) => ({ type: item.type, keywords: item.keywords.map(normalizeText) }));
+  // 表里没有、但看得出是别的号码的简历字段名：不是手机也不是证件号，不按值去猜。
+  const OTHER_NUMBER_KEY = /微信|wechat|qq|学号|学生证|工号|准考证|考生号|报名号|学籍|证书|编号|卡号|账号|帐号|邮编|邮政编码/;
 
   function detectCascadeGroups(fields, fieldMap) {
     const selectFields = fields.filter((f) => f.tagName === "select");
@@ -145,7 +149,17 @@
       field?.ariaLabel
     ].filter(Boolean).join(" "));
 
-    return FIELD_SEMANTICS.find((item) => item.keywords.some((keyword) => haystack.includes(normalizeText(keyword))))?.type || "";
+    return SEMANTIC_KEYWORDS.find((item) => item.keywords.some((keyword) => haystack.includes(keyword)))?.type || "";
+  }
+
+  // 简历字段名是哪一类：先查 FIELD_SEMANTICS，再认 DOB 这类缩写（整个名字才算，Adobe 不算）和别的号码。
+  // 认不出返回空串。只看字段名不看分组，和 inferFieldSemantic 一样：分组「联系方式」会把整组都认成电话。
+  function resumeKeyType(key) {
+    const type = inferFieldSemantic({ label: key });
+    if (type) return type;
+    const text = normalizeText(key);
+    if (/^(dob|born)$/.test(text)) return "birth_date";
+    return OTHER_NUMBER_KEY.test(text) ? "other" : "";
   }
 
   // Keep complete groups (including every repeated experience). Unknown or
@@ -186,6 +200,12 @@
     const strongTypes = new Set(["name", "email", "phone", "gender", "birth_date", "id_number", "hometown", "region"]);
     const matches = [];
     const usedResumeIndexes = new Set();
+    // 简历字段名的类别每项只算一次，用到时才算。
+    const keyTypes = new Map();
+    const keyTypeOf = (index) => {
+      if (!keyTypes.has(index)) keyTypes.set(index, resumeKeyType(resumeFields[index]?.key));
+      return keyTypes.get(index);
+    };
 
     formFields.forEach((field) => {
       const semantic = inferFieldSemantic(field);
@@ -200,7 +220,7 @@
           return false;
         }
 
-        if (!isSamePersonScope(resumeField, formScope) || !isResumeFieldMatch(semantic, resumeField, field)) {
+        if (!isSamePersonScope(resumeField, formScope) || !isResumeFieldMatch(semantic, resumeField, field, () => keyTypeOf(index))) {
           return false;
         }
 
@@ -489,14 +509,15 @@
     return /^(请选择|请输入|please\s*(select|choose)|select\b|choose\b|--|—)|^选择$/i.test(text);
   }
 
-  function isResumeFieldMatch(semantic, resumeField, formField) {
+  function isResumeFieldMatch(semantic, resumeField, formField, keyType = () => resumeKeyType(resumeField?.key)) {
     const keyText = normalizeText([resumeField?.group, resumeField?.key].filter(Boolean).join(" "));
     const value = String(resumeField?.value ?? "").trim();
-    // 字段名认得出是哪一类（手机、身份证号、姓名）就只按名字算，认不出的（自定义的「号码1」）才看值像什么。
+    // 字段名认得出是哪一类（手机、身份证号、微信、姓名）就只按名字算，认不出的（自定义的「号码1」）才看值像什么。
     // 手机号也是 8 到 18 位数字，纯数字的身份证号也像电话，按值算会让排在前面的那项填进另一个框。
-    // 只看字段名不看分组，和 inferFieldSemantic 一样：分组「联系方式」会把整组都认成电话。
-    const keyType = inferFieldSemantic({ label: resumeField?.key });
-    const looksLike = (pattern, text = value) => (keyType ? keyType === semantic : pattern.test(text));
+    const looksLike = (pattern, text = value) => {
+      const type = keyType();
+      return type ? type === semantic : pattern.test(text);
+    };
 
     switch (semantic) {
       case "name":
@@ -506,10 +527,11 @@
       case "phone":
         return looksLike(/^(\+?\d[\d\s-]{7,})$/) || keyText.includes("手机") || keyText.includes("电话");
       case "gender":
-        return looksLike(/(男|女|male|female)/i) || keyText.includes("性别");
+        // 按值猜只收整个值就是性别的，带「女」字的经历描述不算。
+        return looksLike(/^(男|女|男性|女性|male|female)$/i) || keyText.includes("性别");
       case "birth_date":
         // 日期看不出是谁的：毕业时间、实习起止时间也是这个样子，出生日期只按名字认。
-        return /出生|生日|birth/.test(keyText);
+        return /出生|生日|birth/.test(keyText) || keyType() === "birth_date";
       case "id_number":
         return keyText.includes("身份证") || keyText.includes("证件") || looksLike(/^[0-9xX]{8,18}$/, value.replace(/\s/g, ""));
       case "hometown":

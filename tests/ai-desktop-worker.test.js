@@ -264,6 +264,24 @@ test('the page\'s local matches and the worker keep a mobile and an ID number ap
   }
 });
 
+// 简历按真实顺序合并（模板在前、「我的信息」在后），模板里的微信、QQ 不能填进证件号码。
+test('the page\'s local matches and the worker do not take a WeChat or QQ number for the ID number', async () => {
+  const profile = require('../profile-fields.js');
+  const formFields = [{ fieldId: 'name', label: '姓名' }, { fieldId: 'phone', label: '手机号码' },
+    { fieldId: 'id', label: '证件号码' }, { fieldId: 'school', label: '学校' }];
+  const mine = profile.profileToResumeFields({ values: { idNumber: '110101199003071234' } });
+  const expected = [{ fieldId: 'name', value: '测试用户' }, { fieldId: 'phone', value: '13800138000' }, { fieldId: 'id', value: '110101199003071234' }];
+  for (const other of [{ key: '微信', value: '13800138000' }, { key: 'QQ', value: '123456789' }]) {
+    const resumeFields = profile.mergeResumeFields([{ group: '基本信息', key: '姓名', value: '测试用户' },
+      { group: '基本信息', key: '手机', value: '13800138000' }, { group: '基本信息', ...other },
+      { group: '教育背景', key: '学校', value: '大学乙' }], mine);
+    const env = worker(() => ({ ok: true, text: '[]' }));
+    const result = await env.run({ formFields, resumeFields });
+    assert.deepEqual(helpers.localRuleMatches(formFields, resumeFields, profile), expected, other.key);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.matches)), expected, other.key);
+  }
+});
+
 // #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
 test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
   const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));
