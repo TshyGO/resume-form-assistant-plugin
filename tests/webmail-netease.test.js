@@ -127,3 +127,19 @@ test('a lookalike message document at an unrelated path is rejected', async () =
   frame.src = content.location.href;
   assert.equal((await webmail.capture(doc, () => assert.fail('must not fetch'))).status, 'unrecognized_mail');
 });
+for (const host of ['mail.163.com','mail.126.com']) test(`${host} js6 excerpt retries reject same-URL body changes and identical iframe reloads`,async()=>{
+  for(const mutate of [
+    f=>{f.content.querySelector('#content').textContent='Another mail';},
+    f=>{f.doc.querySelector('h1').textContent='Another subject';},
+    f=>{Object.defineProperty(f.frame,'contentDocument',{configurable:true,value:new JSDOM(f.content.documentElement.outerHTML,{url:f.content.location.href}).window.document});},
+    f=>{f.content.defaultView.history.replaceState({},'','/js6/read/readhtml3.jsp?mid=other');},
+  ]) {
+    const f=reader({host});
+    const proposal=await webmail.capture(f.doc,async()=>new Response('Unavailable',{status:503}));
+    assert.equal(proposal.status,'excerpt_offer');
+    assert.equal(webmail.validateTarget(f.doc,proposal.target,false).status,'current');
+    assert.equal(webmail.validateTarget(f.doc,proposal.target,false).status,'current');
+    mutate(f);
+    assert.equal(webmail.validateTarget(f.doc,proposal.target,false).status,'changed');
+  }
+});

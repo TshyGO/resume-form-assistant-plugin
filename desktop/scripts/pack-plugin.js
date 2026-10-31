@@ -17,6 +17,8 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "background.js",
   "content.js",
   "webmail.js",
+  "gmail-download.html",
+  "gmail-download.js",
   "sidepanel-mail.js",
   "content.css",
   "sidebar-state.js",

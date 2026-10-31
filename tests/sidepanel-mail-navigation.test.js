@@ -24,7 +24,9 @@ async function panel({ url = 'https://mail.163.com/js6/main.jsp?sid=synthetic', 
       } },
     tabs: { query: async () => [tab], sendMessage: async (id, message) => {
       calls.push({ target: 'page', id, ...message });
-      if (message.type === 'WEBMAIL_CAPTURE') return capture;
+      if (message.type === 'WEBMAIL_CAPTURE') return capture?.status === 'excerpt_offer' ? {target:'synthetic-target',...capture} : capture;
+      if (message.type === 'WEBMAIL_CHECK' || message.type === 'WEBMAIL_VALIDATE') return {status:'current'};
+      if (message.type === 'WEBMAIL_DISCARD') return {status:'discarded'};
       return { ready: true, ok: true, targetAvailable: false };
     }, onActivated: { addListener: fn => handlers.activate.push(fn) }, onUpdated: { addListener: fn => handlers.update.push(fn) } },
     storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }

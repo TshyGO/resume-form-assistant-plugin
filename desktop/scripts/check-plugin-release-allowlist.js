@@ -40,7 +40,7 @@ export function assertPluginOnlyArchive(entries) {
   const allowed = new Set(["manifest.json","background.js","content.js","content.css","sidebar-state.js","control-adapters.js","antd-prefix.js","custom-controls.js","ai-helpers.js","form-agent.js","fill-probe.js","field-scan.js",
     "page-outline.js","deep-analysis.js","page-actions.js","page-recipe.js",
     "feedback-core.js","feedback-ui.js","feedback.css","usage-ui.js","usage-ui.css",
-    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","profile-fields.js","resume-data.js","template-fields.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js","sidepanel-compose.js","sidepanel-queue.js","sidepanel-template-editor.js","sidepanel-mail.js","webmail.js",
+    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","profile-fields.js","resume-data.js","template-fields.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js","sidepanel-compose.js","sidepanel-queue.js","sidepanel-template-editor.js","sidepanel-mail.js","webmail.js","gmail-download.js","gmail-download.html",
     "README.md","LICENSE",
     ...JSON.parse(readFileSync(new URL('./plugin-release-assets.json', import.meta.url), 'utf8'))]);
   const exact = new Set(entries);

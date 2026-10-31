@@ -25,7 +25,7 @@ for (const [name, make] of [['QQ', qq], ['163', netease], ['126', () => {
   assert.ok(!JSON.stringify(got).includes('synthetic'));
 });
 test('rejects lookalike domains, insecure pages and unsupported providers', () => {
-  for (const url of ['https://mail.qq.com.evil.test', 'http://mail.qq.com', 'https://163.com.evil.test', 'https://mail.google.com']) assert.equal(webmail.provider(url), null);
+  for (const url of ['https://mail.qq.com.evil.test', 'http://mail.qq.com', 'https://163.com.evil.test', 'https://mail.google.com.evil.test/mail/u/0/']) assert.equal(webmail.provider(url), null);
 });
 test('mail list is not guessed to be an opened message and sends no network request', async () => {
   const d = new JSDOM('<div>收件箱</div>', { url: 'https://mail.qq.com' }).window.document;
