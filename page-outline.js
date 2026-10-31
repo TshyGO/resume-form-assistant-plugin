@@ -77,11 +77,13 @@
     return String(el?.getAttribute?.(name) ?? "");
   }
 
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：类名换回 ant- 再认组件库。
   function libraryOf(el) {
     for (let current = el, depth = 0; current && depth <= 4; current = current.parentElement, depth += 1) {
       const tokens = typeof current.className === "string" ? current.className.split(/\s+/) : [];
       for (const token of tokens) {
-        const hit = LIBRARIES.find(([, pattern]) => pattern.test(token));
+        const name = scope.ResumeProAntdPrefix?.token(current, token) ?? token;
+        const hit = LIBRARIES.find(([, pattern]) => pattern.test(name));
         if (hit) return hit[0];
       }
     }
