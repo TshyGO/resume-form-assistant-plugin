@@ -367,7 +367,10 @@ function dropWindow(doc) {
 }
 
 test("a frame that leaves its page while the AI is matching stops the fill like a top-page change", async () => {
-  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: FORM } });
+  // #402 本地规则能填的字段（姓名、性别、出生日期）会在等 AI 时先填，框架这时换页由写入时的复查停下。
+  // 这里只给要等 AI 的字段，看 AI 回来时的那次检查。
+  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: FORM },
+    values: { 学历: "本科", 个人简介: "喜欢写代码", 服从: "是" } });
   const old = page.frame("main");
   const send = page.win.chrome.runtime.sendMessage;
   page.win.chrome.runtime.sendMessage = async (message) => {
