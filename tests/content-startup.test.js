@@ -131,7 +131,7 @@ for (const [name, options] of [
 
 test("#275: the scripts with a CommonJS export still export their api under Node", () => {
   const exporting = SCRIPTS.filter((file) => SOURCES[file].includes("module.exports ="));
-  assert.equal(exporting.length, 13);
+  assert.equal(exporting.length, 14);
   for (const file of exporting) {
     assert.ok(Object.keys(require(path.join(root, file))).length > 0, `${file} exports its api`);
   }

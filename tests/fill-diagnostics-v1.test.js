@@ -46,12 +46,12 @@ test("an empty page is page_not_supported unless it looks like an application fo
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown" }), { category: "page_not_supported", stage: "scan" });
   // 看不出是表单页，但有跨域框架：申请表可能就嵌在里面，判断不了就照常上报。
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown", frames: { crossOrigin: 1, frameInputs: 0 } }),
-    { category: "iframe_blocked", stage: "scan" });
+    { category: "iframe_cross_origin", stage: "scan" });
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form" }), { category: "no_fields_found", stage: "scan" });
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form", frames: { crossOrigin: 2, frameInputs: 0 } }),
-    { category: "iframe_blocked", stage: "scan" });
+    { category: "iframe_cross_origin", stage: "scan" });
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form", frames: { crossOrigin: 0, frameInputs: 3 } }),
-    { category: "iframe_blocked", stage: "scan" });
+    { category: "iframe_same_origin", stage: "scan" });
   // 页面探测不可用：判断不了是不是表单页，照旧当成没找到字段上报。
   assert.deepEqual(core.fillCategory({ ...empty, pageType: null, frames: null }), { category: "no_fields_found", stage: "scan" });
   assert.deepEqual(core.fillCategory({ scanned: false, fieldCount: 0 }), { category: "unknown", stage: "scan" });
@@ -78,7 +78,7 @@ test("failures after the scan name the stage, and a service failure is not calle
 test("pages that are not application forms are never reported automatically", () => {
   const empty = { fieldCount: 0, filledCount: 0, unfilledCount: 0 };
   assert.equal(core.fillFailure({ ...empty, category: "page_not_supported" }), null);
-  for (const category of ["no_fields_found", "iframe_blocked", undefined]) {
+  for (const category of ["no_fields_found", "iframe_same_origin", "iframe_cross_origin", undefined]) {
     assert.equal(core.fillFailure({ ...empty, category }), "fill_failed", String(category));
   }
 });
@@ -92,7 +92,7 @@ const IFRAME_PAGE = {
   fieldCount: 0, matched: null, filledCount: 0, unfilledCount: 0, unconfirmedCount: 0, unsyncedCount: 0, requested: false,
   probe: { frames: { total: 2, crossOrigin: 2, frameInputs: 0 }, custom: { total: 0, byLibrary: {} },
     editButtons: 0, locked: 3, shadowHosts: 1, elements: 830 },
-  category: "iframe_blocked", stage: "scan",
+  category: "iframe_cross_origin", stage: "scan",
   diagnostics: null,
   unfilledControls: [],
   entry: "panel", pageFocused: false
@@ -133,7 +133,7 @@ test("the v1 block answers why a page had no fields, section by section", () => 
     "edit_buttons: 0",
     "",
     "[错误]",
-    "error_category: iframe_blocked",
+    "error_category: iframe_cross_origin",
     "first_failing_stage: scan",
     "error_code: -",
     "",
@@ -242,7 +242,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     stats: { domInputs: big, visible: big, typeHidden: big, nonFillable: big, disabled: big, invisible: big, grouped: big, outOfScope: big,
       popup: big, pageChrome: big, siteSearch: big, outsideForm: big, noLabel: big,
       sources: { explicit: big, item: big, table: big, sibling: big, placeholder: big }, offerSkipped: { ambiguous: big, entry: big } },
-    fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, requested: true,
+    fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, keptCount: big, requested: true,
     diagnostics: { ruleMatches: 1, aiFields: big, aiMatches: 1, promptBytes: 10, apiMs: 1, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
     probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
       ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } },
@@ -250,7 +250,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     unfilledControls: [{ label: "参加工作时间", reasonCode: "framework_state_unsynced", observed: { opened: "component", hasOptions: true },
       control: { tag: "input", type: "checkbox", role: "checkbox", popup: "listbox", readOnly: true, picker: "element", library: "element" } }] });
   const drops = /^drop_reasons: (.*)$/m.exec(report);
-  assert.ok(drops && drops[1].split(",").length === 17, report);
+  assert.ok(drops && drops[1].split(",").length === 18, report);
   assert.match(report, /^label_sources: (?:[a-z]+=999999,){4}placeholder=999999$/m);
   assert.match(report, /^offer_skipped: ambiguous=999999,entry=999999$/m);
   assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}generic=999999,other=999999$/m);

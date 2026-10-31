@@ -52,6 +52,8 @@
   let panelQueriedAt = 0;
   let panelNotifyTimer = null;
   const PANEL_ONLINE_MS = 5000;
+  // 等 AI 多久后给提示（#402，原来是 90 秒）。
+  const WAIT_HINT_SECONDS = 30;
   const textFillFailures = new WeakMap();
   // 给页面自己的校验留一点时间。短到不拖慢整表，长过常见的几十毫秒回滚。
   let textCommitWaitMs = 100;
@@ -83,6 +85,8 @@
     cascade_unsupported: "两级选择暂不支持",
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
+    format_mismatch: "只能填数字",
+    readonly_picker: "网页自己的选择框",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
@@ -144,6 +148,7 @@
       const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
       const status = shadowRoot?.querySelector("#resume-pro-status");
       const cancel = shadowRoot?.querySelector("#resume-pro-cancel-fill");
+      const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
@@ -162,6 +167,8 @@
         openView: state.suggestedView,
         // While 辅助新增 runs, its own 停止 is the one control; the fill's cancel stays hidden.
         canCancel: !repeatActive() && Boolean(cancel && !cancel.hidden && !cancel.disabled),
+        // 等 AI 久了的提示（#402）：网页里的旧侧栏是隐藏的，侧栏自己显示这段文字。
+        waitHint: state.aiBusy && waitHint && !waitHint.hidden ? waitHint.textContent : "",
         // 保存到「我的信息」的候选、勾选依据和结果（#189）；null 表示没有可问的。
         profileOffer: panelProfileSnapshot(),
         // Archiving the fill that just ended (#178): the offer, the application question and
@@ -477,7 +484,7 @@
     }
     // Every helper this script calls must have loaded. A page element or frame named "module"
     // once kept one from loading (#275), and the page then must not show as connected.
-    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProCustomControls",
+    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProAntdPrefix", "ResumeProCustomControls",
       "ResumeProControls", "ResumeProProfile", "ResumeProResumeData", "ResumeProFormAgent", "ResumeProFillProbe",
       "ResumeProFieldScan", "ResumeProPageOutline", "ResumeProDeepAnalysis", "ResumeProPageActions",
       "ResumeProPageRecipe", "ResumeProSidebarState"];
@@ -1056,7 +1063,7 @@
   }
 
   function readLiveTextSelection(target) {
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    if (isInputElement(target) || isTextAreaElement(target)) {
       let start;
       let end;
       try {
@@ -1068,7 +1075,7 @@
       return Number.isInteger(start) && Number.isInteger(end) ? { start, end } : null;
     }
 
-    const selection = window.getSelection?.();
+    const selection = viewOf(target).getSelection?.();
     if (!selection?.rangeCount) return null;
     const range = selection.getRangeAt(0);
     if (!target.contains?.(range.commonAncestorContainer)) return null;
@@ -1107,8 +1114,8 @@
 
   function rememberTextSelection(target) {
     // 只记光标下标，不记文本；这里不做敏感判断，避免每次 selectionchange 都去找标签。
-    const textual = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
-      || (target instanceof HTMLElement && target.isContentEditable);
+    const textual = isInputElement(target) || isTextAreaElement(target)
+      || (isHtmlElement(target) && target.isContentEditable);
     if (!textual || chipWriteTargets.has(target)) return;
     const live = validTextSelection(readLiveTextSelection(target), getComposableTargetValue(target).length);
     if (live) savedTextSelections.set(target, live);
@@ -1163,7 +1170,7 @@
   }
 
   async function applyChipValue(target, chipValue, mode, selection, chipId = "") {
-    if (!isComposableTextTarget(target) || !document.contains(target)) {
+    if (!isComposableTextTarget(target) || !inPage(target)) {
       return false;
     }
 
@@ -1199,7 +1206,7 @@
     }
 
     target.focus?.();
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    if (isInputElement(target) || isTextAreaElement(target)) {
       target.setSelectionRange?.(composed.caret, composed.caret);
     } else {
       setContentEditableCaret(target, composed.caret);
@@ -1211,7 +1218,7 @@
   }
 
   function getComposableTargetValue(target) {
-    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+    return isInputElement(target) || isTextAreaElement(target)
       ? String(target.value || "")
       : String(target.textContent || "");
   }
@@ -1239,8 +1246,8 @@
   }
 
   function setContentEditableCaret(target, caret) {
-    const selection = window.getSelection?.();
-    const range = document.createRange?.();
+    const selection = viewOf(target).getSelection?.();
+    const range = docOf(target).createRange?.();
     if (!selection || !range) {
       return;
     }
@@ -1256,7 +1263,7 @@
   const OTP_HINT = /(?:^|[^a-z])otp(?:[^a-z]|$)|one[-_ ]?time|sms[-_ ]?code|verif(?:y|ication)[-_ ]?code|security[-_ ]?code|captcha|验证码|校验码|短信码|动态码|安全码/i;
 
   function isSensitiveTextTarget(target) {
-    if (!(target instanceof HTMLElement)) return false;
+    if (!isHtmlElement(target)) return false;
     const type = String(target.type || "").toLowerCase();
     if (type === "password") return true;
     const attr = (name) => String(target.getAttribute?.(name) || "");
@@ -1274,17 +1281,17 @@
 
   function isBlockedFillTarget(target) {
     return isSensitiveTextTarget(target)
-      || (target instanceof HTMLInputElement && String(target.type || "").toLowerCase() === "file");
+      || (isInputElement(target) && String(target.type || "").toLowerCase() === "file");
   }
 
   function isComposableTextTarget(target) {
-    if (!(target instanceof HTMLElement) || target.disabled || target.readOnly || isSensitiveTextTarget(target)) {
+    if (!isHtmlElement(target) || target.disabled || target.readOnly || isSensitiveTextTarget(target)) {
       return false;
     }
-    if (target instanceof HTMLTextAreaElement || target.isContentEditable) {
+    if (isTextAreaElement(target) || target.isContentEditable) {
       return true;
     }
-    return target instanceof HTMLInputElement && ["text", "search", "tel", "url", "email"].includes(target.type || "text");
+    return isInputElement(target) && ["text", "search", "tel", "url", "email"].includes(target.type || "text");
   }
 
   function syncChipSelectionState() {
@@ -2313,7 +2320,7 @@
 
   // 自制单选（#269 北森 phoenix-radio）的选项是 div：选中状态由组件的 --checked / aria-checked 标出。
   function radioChecked(el) {
-    return el instanceof HTMLInputElement ? el.checked : Boolean(self.ResumeProCustomControls?.isChecked?.(el));
+    return isInputElement(el) ? el.checked : Boolean(self.ResumeProCustomControls?.isChecked?.(el));
   }
 
   function hasExistingValue(entry) {
@@ -2336,7 +2343,7 @@
   // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
   function fillValueSnapshot(entry) {
     if (entry.kind === "radio") return entry.elements.every(el => el.isConnected)
-      ? JSON.stringify(entry.elements.map(el => [el instanceof HTMLInputElement ? el.value : el.textContent.trim(), radioChecked(el)])) : null;
+      ? JSON.stringify(entry.elements.map(el => [isInputElement(el) ? el.value : el.textContent.trim(), radioChecked(el)])) : null;
     const el = entry.element;
     if (!el?.isConnected) return null;
     if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
@@ -2346,7 +2353,7 @@
     }
     if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
     if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
-    if (el instanceof HTMLSelectElement) {
+    if (isSelectElement(el)) {
       const option = el.options[el.selectedIndex];
       const emptyPlaceholder = el.value === "" && (el.selectedIndex < 0
         || (option && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
@@ -2403,6 +2410,14 @@
     let phaseStart = totalStart;
     let phase = "scanMs";
     let timer = null;
+    // #402 先填：AI 返回前填上了几项、先填花了多久；AI 请求还没回来时出错或停下，结束时一并取消。
+    let earlyFilled = 0;
+    let earlyFillMs = 0;
+    let earlyFrom = null;
+    let aiPending = false;
+    let aiDoneAt = null;
+    // 等 AI 期间被改过、没有覆盖的字段名；诊断里只记个数。
+    const kept = [];
     let diagnostics = {};
     let fieldCount = 0;
     let filledCount = 0;
@@ -2440,9 +2455,10 @@
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     // 只在什么都没匹配上、AI 也没出错时这样说：AI 超时、匹配到了却写不上（#299）都不是查看状态。
+    // 从同源框架里扫到了一张表单那么多的字段（#400）：表单已经显示出来，不是查看状态。只有一两个（留言框）照样提示。
     const viewModeHint = () => !assisted && filledCount === 0 && !matched && probe?.editButtons > 0
       && ["none", "no_context"].includes(diagnostics.errorCode || "none")
-      ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
+      ? withFillProbe(api => stats?.frameFields >= api.FORM_INPUTS ? "" : api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
     // 失败信息里带了「先点编辑」这类提示，或是扫描到 0 个字段：要一直留在屏幕上，不像别的失败几秒后消失。
@@ -2484,7 +2500,9 @@
       scanDone = true;
       const describeScan = () => {
         fieldCount = fields.length;
-        scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
+        // 和页面探测比较、相减的只算顶层的字段：探测只数顶层的自定义控件和只读框（#400 框架里的字段不算）。
+        const topFields = fields.filter(field => entryDocument(fieldMap.get(field.fieldId)) === document);
+        scannedCustom = topFields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
         // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
         scanPath = location.pathname;
         stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
@@ -2494,7 +2512,7 @@
         // 通用下拉的根只给诊断计数用：读控件出错就不数，填写照常。
         let genericRoots = [];
         try {
-          genericRoots = fields
+          genericRoots = topFields
             .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
             .map(field => { try { return self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)); } catch { return null; } })
             .filter(info => info?.library === "generic").map(info => info.root);
@@ -2524,7 +2542,7 @@
         hinted = !assisted && !scanned.fields.length;
         const hint = hinted
           ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown", form: pageType?.type === "application_form",
-            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
+            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline), frameUntitled: stats?.frameUntitled }), "") : "";
         throw new Error(`没找到可填写的输入框。${hint}`);
       }
       if (!assisted) closeProfileOffer();
@@ -2540,95 +2558,10 @@
       phaseStart = performance.now();
       // 补填新出现字段时发出的 AI 请求（#269）：停止时一并取消，不等它返回。
       let catchUpRequestId = null;
-      if (cancelButton) {
-        cancelButton.hidden = false;
-        cancelButton.disabled = false;
-        cancelButton.onclick = async () => {
-          if (phase === 'fillMs') {
-            writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
-            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
-            showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
-            return;
-          }
-          if (phase !== "roundTripMs") return;
-          cancelRequested = true;
-          cancelButton.disabled = true;
-          try {
-            const reply = await self.ResumeProAIClient.cancel(requestId);
-            cancelRequested = Boolean(reply?.cancelled);
-            if (waitHint && phase === "roundTripMs") {
-              waitHint.hidden = false;
-              waitHint.textContent = reply?.cancelled ? "正在取消 AI 等待，保留本地匹配结果。" : "请求已结束或无法取消，正在等待结果。";
-            }
-          } catch {
-            cancelRequested = false;
-            if (phase === "roundTripMs") {
-              cancelButton.disabled = false;
-              if (waitHint) {
-                waitHint.hidden = false;
-                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
-              }
-            }
-          }
-        };
-      }
-      const updateProgress = () => {
-        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
-        button.textContent = `AI 匹配中... ${seconds}s`;
-        if (seconds >= 90 && waitHint && !cancelRequested) {
-          waitHint.hidden = false;
-          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。你可以继续等待或手动取消。";
-        }
-      };
-      updateProgress();
-      timer = window.setInterval(updateProgress, 1000);
-      // A stop during the preparation above had no request to cancel yet: send nothing.
-      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
-      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
-      assisted?.onRequest?.(requestId);
-      deep?.onRequest?.(requestId);
-      requested = true;
-      const response = await self.ResumeProAIClient.send({
-        type: "AI_FILL",
-        requestId,
-        formFields: fields,
-        resumeFields,
-        ...(deep?.tier ? { tier: deep.tier, maxCalls: deep.maxCalls } : {})
-      });
-      timing.roundTripMs = performance.now() - phaseStart;
-      phase = null;
-      window.clearInterval(timer);
-      timer = null;
-      if (waitHint) waitHint.hidden = true;
-      diagnostics = response?.diagnostics || {};
-      responded = Boolean(response);
-      // Cancellation may race a successful AI reply. Only the worker's explicitly
-      // cancelled response may retain its documented local matches.
-      if (cancelRequested && diagnostics.errorCode !== 'cancelled') {
-        writeCancelled = true;
-        throw new Error('已取消填写，忽略迟到的 AI 结果。');
-      }
-      matched = Array.isArray(response?.matches) ? response.matches.length : null;
-      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
-      // 深度分析在等 AI 时被停止：worker 会带回本地匹配，但用户已经说了停，一项都不写。
-      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
-
-      if (response?.openView === "settings-ai") {
-        state.suggestedView = "settings-ai";
-        await openManager("settings-ai");
-      }
-      if (!response?.success) {
-        throw new Error(response?.error || "AI 填写失败。");
-      }
-
-      button.textContent = "正在填写网页...";
-      phase = "fillMs";
-      stage = "fill";
-      phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
       const domOrderMap = new Map(fields.map((field, index) => [field.fieldId, index]));
-      const sortedMatches = [...response.matches].sort((a, b) => {
+      const byOrder = (a, b) => {
         const ma = fieldMetaMap.get(a.fieldId);
         const mb = fieldMetaMap.get(b.fieldId);
         if (ma?.cascadeGroup !== undefined && ma.cascadeGroup === mb?.cascadeGroup) {
@@ -2636,33 +2569,24 @@
         }
         // 其余按页面顺序从上往下填：没被识别成联动组的省/市/县也能等上一级先选好。
         return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
-      });
+      };
 
+      // 等 AI 时字段所在的同源框架换了页或被删掉（#400）：和顶层换页一样算页面变了，不往旧文档里写。
+      const framesGone = () => {
+        for (const entry of fieldMap.values()) if (documentGone(entryDocument(entry))) return true;
+        return false;
+      };
       const approvedValues = new Map();
-      if (!assisted) {
-        for (const match of sortedMatches) {
-          const entry = fieldMap.get(match.fieldId);
-          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
-        }
-        const occupiedCount = [...approvedValues.keys()].filter(hasExistingValue).length;
-        if (occupiedCount && !window.confirm(
-          `本次将重新填写 ${occupiedCount} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？取消将保留网页现有内容，本次不会写入任何字段。AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
-        )) {
-          overwriteDeclined = true;
-          cancelRequested = true;
-          showStatus("已取消填写，网页现有内容未修改。", "error", true);
-          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
-          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
-            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
-        }
-      }
 
       const noteControlFailure = (element, fieldMeta, value, reason, uncertain) => {
         const control = element.kind === 'element' ? element.element : element;
         textFillFailures.set(control, reason);
         if (assisted) { if (uncertain !== false) unconfirmedCount += 1; return; }
         const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || '未命名字段';
-        const why = TEXT_FILL_FAILURE_LABELS[reason] || '';
+        // #399 #405 写入被拒的文本框：框里剩下的是什么；#301 日历没选上、框里却换成了别的日子（#418 回车交出今天）。
+        const leftover = LEFTOVER_REASONS.has(reason) ? textLeftovers.get(control) : null;
+        const changed = reason === 'selection_not_committed' && leftover?.session === session && leftover.after === 'other';
+        const why = changed ? '选成了别的日期' : TEXT_FILL_FAILURE_LABELS[reason] || '';
         const shown = why ? `${label}（${why}）` : label;
         if (uncertain ?? ['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
           unconfirmedCount += 1;
@@ -2675,9 +2599,16 @@
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
         // #301 本次填写操作过的下拉：弹层有没有出来、里面有没有选项。没操作过的（上一级没选上）不带。
         const popup = controlPopups.get(control);
+        // #399 #405 写入被拒的文本框：填它的 1 秒内有没有冒出建议框或弹层。
+        const overlay = TEXT_REJECTED.has(reason) ? overlayWatches.get(control)?.kind() : null;
+        const observed = {
+          ...(popup && popup.session === session ? { opened: popup.opened, hasOptions: popup.hasOptions } : {}),
+          ...(leftover && leftover.session === session ? { after: leftover.after } : {}),
+          ...(overlay ? { overlay } : {})
+        };
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
-          ...(popup && popup.session === session ? { observed: { opened: popup.opened, hasOptions: popup.hasOptions } } : {}),
+          ...(Object.keys(observed).length ? { observed } : {}),
           // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
           ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
@@ -2697,6 +2628,7 @@
           if (checked && !checked.ok) {
             filledCount -= 1;
             if (item.isNew) supplemented -= 1;
+            rememberLeftover(item.element, checked);
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
@@ -2707,6 +2639,7 @@
           const current = isFieldBindingCurrent(item.element);
           const checked = current ? controlOperator?.check(item.element) : null;
           if (!checked?.ok) {
+            rememberLeftover(item.element, checked);
             noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
             continue;
           }
@@ -2721,7 +2654,7 @@
         }
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
-        && location.href === fillUrl && session === fillSession;
+        && location.href === fillUrl && session === fillSession && !framesGone();
       // 停下来时说清楚是用户按了停止，还是页面或填写会话变了。
       const stopError = () => {
         cancelRequested = true;
@@ -2730,10 +2663,12 @@
       const failedCascadeGroups = new Set();
       // #269 选了某项后页面才出现的字段（智联选完学历多出专业、院系）：选完等页面安静再扫一次，
       // 新出现的空字段先在本地匹配、当场排进这一轮；本地匹配不上的，这一轮结束后交给 AI 补填，最多补 2 次。
-      const queue = sortedMatches.slice();
+      const queue = [];
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
+      // 本次填写里为看弹层多等过的被拒文本框个数（最多 OVERLAY_WAITS 个）。
+      let overlayWaits = 0;
       let dayDefaulted = 0;
       // #301 新字段的去向：「加到我的信息」看 grownFields 和 grownMatchedIds；补填失败或没发出的进 grownMissed，
       // 状态行请用户自己补，并附上补填请求的警告。
@@ -2741,10 +2676,14 @@
       const grownMatchedIds = new Set();
       const grownMissed = [];
       let grownWarning = "";
-      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。
-      const aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
-      const pickUpNewFields = async (position) => {
-        await waitForPageSettle();
+      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。AI 回来后才知道。
+      let aiDown = false;
+      // #402 先填阶段：同一对里还在等 AI 的另一半（Moka 起止时间），和选完后页面带出值、已重新批准的字段。
+      let waitingAi = false;
+      let awaiting = [];
+      const pageFilled = new Set();
+      const pickUpNewFields = async (position, doc) => {
+        await waitForPageSettle(doc);
         if (!isCurrent()) return;
         // 同名题目的序号会因为新字段插进来而变（两段教育经历都有「专业」）：原来就扫到过的元素不算新字段。
         const nodeOf = entry => entry?.kind === "radio" ? entry.elements?.[0] : entry?.element;
@@ -2827,10 +2766,282 @@
           if (!grownWarning && typeof reply?.warning === "string") grownWarning = reply.warning;
         }
       };
+
+      // #402 普通一键填写分两步：本地规则能确定的空字段先填，AI 请求同时在后台进行；AI 回来后只补剩下的字段，
+      // 再照旧复核、补填新出现的字段和记账。已经有内容的字段要问过才覆盖：留到 AI 回来，和其余字段一起只问一次。
+      const plain = !assisted && !deep;
+      let early = [];
+      if (plain) {
+        try {
+          const helpers = self.ResumeProAIHelpers;
+          const local = helpers?.localRuleMatches && self.ResumeProProfile
+            ? helpers.localRuleMatches(fields, resumeFields, self.ResumeProProfile) : [];
+          // 还没有选项的原生下拉多半在等上一级选好：不先填。
+          const ready = new Set(local.filter(match => {
+            const entry = fieldMap.get(match.fieldId);
+            return entry && isFieldBindingCurrent(entry) && !hasExistingValue(entry)
+              && !(entry.kind === "element" && isSelectElement(entry.element) && !hasRealSelectOptions(entry.element));
+          }).map(match => match.fieldId));
+          // 联动下拉从上往下：上一级没先填，下面几级也不先填。
+          const groups = new Map();
+          for (const field of fields) {
+            if (field.cascadeGroup === undefined) continue;
+            if (!groups.has(field.cascadeGroup)) groups.set(field.cascadeGroup, []);
+            groups.get(field.cascadeGroup).push(field);
+          }
+          for (const members of groups.values()) {
+            members.sort((a, b) => (a.cascadeLevel ?? 0) - (b.cascadeLevel ?? 0));
+            const stop = members.findIndex(field => !ready.has(field.fieldId));
+            if (stop >= 0) members.slice(stop).forEach(field => ready.delete(field.fieldId));
+          }
+          early = local.filter(match => ready.has(match.fieldId)).sort(byOrder);
+        } catch {
+          early = [];
+        }
+        // 网页值以点击这一刻为准：等 AI 期间被改过的字段（用户自己填的，或页面带出来的）不覆盖。
+        for (const field of fields) {
+          const entry = fieldMap.get(field.fieldId);
+          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
+        }
+        const earlyIds = new Set(early.map(match => match.fieldId));
+        if (early.length) awaiting = fields.filter(field => !earlyIds.has(field.fieldId)).map(field => fieldMap.get(field.fieldId)).filter(Boolean);
+      }
+      // 先填期间在写网页；AI 回来时还是插件写的值的先填字段。
+      let writing = false;
+      let intactEarly = [];
+      // 先填时选项还没出来、没填上的下拉（字典还在加载，或要等上面 AI 的题目先选好）：AI 回来后再试一次。
+      // 原来所有字段都等 AI 回来才填，那时选项多半已经有了。被页面拒收、值被改回的不在这里。
+      const OPTIONS_LATE = new Set(["options_not_rendered", "options_timeout", "cascade_timeout"]);
+      const earlyRetry = [];
+      if (cancelButton) {
+        cancelButton.hidden = false;
+        cancelButton.disabled = false;
+        cancelButton.onclick = async () => {
+          if (phase === 'fillMs') {
+            writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            overlayWatch?.stop(true);
+            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
+            showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
+            return;
+          }
+          // 先填（#402）还在写时也一样：只取消 AI 等待，本地匹配照常写完，和按钮上写的一致。
+          if (phase !== "roundTripMs") return;
+          cancelRequested = true;
+          cancelButton.disabled = true;
+          try {
+            const reply = await self.ResumeProAIClient.cancel(requestId);
+            cancelRequested = Boolean(reply?.cancelled);
+            if (waitHint && phase === "roundTripMs") {
+              waitHint.hidden = false;
+              waitHint.textContent = !reply?.cancelled ? "请求已结束或无法取消，正在等待结果。"
+                : earlyFilled ? "正在取消 AI 等待，已填的会保留。" : "正在取消 AI 等待，保留本地匹配结果。";
+            }
+          } catch {
+            cancelRequested = false;
+            if (phase === "roundTripMs") {
+              cancelButton.disabled = false;
+              if (waitHint) {
+                waitHint.hidden = false;
+                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
+              }
+            }
+          }
+        };
+      }
+      const updateProgress = () => {
+        if (writing) return;
+        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
+        button.textContent = earlyFilled ? `已先填 ${earlyFilled} 项，AI 匹配中... ${seconds}s` : `AI 匹配中... ${seconds}s`;
+        // #402 等到 30 秒就说：可以接着等，也可以取消，已经填上的不受影响。
+        if (seconds >= WAIT_HINT_SECONDS && waitHint && !cancelRequested) {
+          waitHint.hidden = false;
+          waitHint.textContent = earlyFilled
+            ? `已经先填了 ${earlyFilled} 项，剩下的还在等 AI。可以接着等，也可以点取消，已填的会保留。`
+            : "AI 还没返回，可以接着等，也可以点取消。";
+        }
+      };
+      writing = early.length > 0;
+      if (writing) button.textContent = "正在填写网页...";
+      updateProgress();
+      timer = window.setInterval(updateProgress, 1000);
+      // A stop during the preparation above had no request to cancel yet: send nothing.
+      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
+      assisted?.onRequest?.(requestId);
+      deep?.onRequest?.(requestId);
+      requested = true;
+      const pending = self.ResumeProAIClient.send({
+        type: "AI_FILL",
+        requestId,
+        formFields: fields,
+        resumeFields,
+        ...(deep?.tier ? { tier: deep.tier, maxCalls: deep.maxCalls } : {})
+      });
+      aiPending = true;
+      // 先填期间请求出错不能成为未处理的拒绝；结果在 settleAi 里照旧处理。
+      // 记下 AI 回来的时刻：比先填先回来时，匹配往返不算等先填写完的时间。
+      const aiSettled = () => { aiPending = false; aiDoneAt = performance.now(); };
+      pending.then(aiSettled, aiSettled);
+      let response = null;
+      // AI 回来以后：照旧检查结果，再把先填以外的匹配排进 queue。没有先填时拒绝覆盖，返回和末尾同形的结果。
+      const settleAi = async () => {
+        const earlyRan = waitingAi;
+        if (waitingAi) {
+          earlyFillMs = performance.now() - earlyFrom;
+          earlyFrom = null;
+          waitingAi = false;
+          writing = false;
+          stage = "match";
+          earlyFilled = filledCount;
+          updateProgress();
+        }
+        response = await pending;
+        timing.roundTripMs = (aiDoneAt ?? performance.now()) - phaseStart;
+        phase = null;
+        window.clearInterval(timer);
+        timer = null;
+        if (waitHint) waitHint.hidden = true;
+        diagnostics = response?.diagnostics || {};
+        responded = Boolean(response);
+        aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
+        // Cancellation may race a successful AI reply. Only the worker's explicitly
+        // cancelled response may retain its documented local matches.
+        if (cancelRequested && diagnostics.errorCode !== 'cancelled') {
+          writeCancelled = true;
+          throw new Error('已取消填写，忽略迟到的 AI 结果。');
+        }
+        matched = Array.isArray(response?.matches) ? response.matches.length : null;
+        if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+        // 深度分析在等 AI 时被停止：worker 会带回本地匹配，但用户已经说了停，一项都不写。
+        if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
+
+        if (response?.openView === "settings-ai") {
+          state.suggestedView = "settings-ai";
+          await openManager("settings-ai");
+        }
+        if (!response?.success) {
+          throw new Error(response?.error || "AI 填写失败。");
+        }
+        // 等 AI 时字段所在的同源框架换了页或被删掉（#400）：和顶层换页一样算页面变了，不往旧文档里写。
+        if (framesGone()) {
+          cancelRequested = true;
+          throw new Error("已停止填写，页面或填写会话已变化。");
+        }
+
+        button.textContent = "正在填写网页...";
+        phase = "fillMs";
+        stage = "fill";
+        phaseStart = performance.now();
+
+        // 先填过的不再填。先填时选项还没出来的，网页上还是点击时的样子，就和 AI 的字段一起按页面顺序再试这一次。
+        const done = new Set(early.map(match => match.fieldId));
+        const retry = earlyRetry.splice(0).filter(item => {
+          const entry = fieldMap.get(item.match.fieldId);
+          const current = entry && (isFieldBindingCurrent(entry) ? entry : rebindFieldEntry(entry));
+          return Boolean(current) && fillValueSnapshot(current) === approvedValues.get(entry);
+        });
+        const sortedMatches = [...response.matches.filter(match => !done.has(match.fieldId)), ...retry.map(item => item.match)].sort(byOrder);
+        if (assisted) {
+          queue.push(...sortedMatches);
+          return null;
+        }
+        // 先填过、这时还是插件写的值的字段：AI 这一步选完上面的题目后，页面可能把它清回原样（证件类型→证件号码）。
+        if (earlyRan) intactEarly = verifiedControls.filter(item => done.has(item.fieldId)
+          && isFieldBindingCurrent(item.element) && fillValueSnapshot(item.element) === item.after);
+        const later = [];
+        const occupied = new Set();
+        const keep = (match) => {
+          const meta = fieldMetaMap.get(match.fieldId);
+          kept.push(meta?.label || meta?.placeholder || meta?.name || "未命名字段");
+        };
+        for (const match of sortedMatches) {
+          let entry = fieldMap.get(match.fieldId);
+          if (entry && !plain) approvedValues.set(entry, fillValueSnapshot(entry));
+          else if (entry && !isFieldBindingCurrent(entry)) {
+            // 先填的选择让页面重画了后面的字段（#269 智联）：找回的新字段和点击时一样，就按新字段判断有没有内容；
+            // 新字段的内容变了（等 AI 时用户在新字段里填了，或页面带出的值），和没重画的字段一样保留不覆盖。
+            // 找不回或读不出内容的，交给下面循环里原有的重绑和写入前复查。
+            const fresh = rebindFieldEntry(entry);
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            if (now === null) {
+              later.push(match);
+              continue;
+            }
+            if (now !== approvedValues.get(entry)) {
+              keep(match);
+              continue;
+            }
+            approvedValues.set(fresh, approvedValues.get(entry));
+            if (pageFilled.has(entry)) pageFilled.add(fresh);
+            fieldMap.set(match.fieldId, fresh);
+            entry = fresh;
+          } else if (entry && fillValueSnapshot(entry) !== approvedValues.get(entry)) {
+            keep(match);
+            continue;
+          }
+          // 先填时页面跟着带出值的另一半（Moka 的月份）不算已有内容。
+          if (entry && !pageFilled.has(entry) && hasExistingValue(entry)) occupied.add(entry);
+          later.push(match);
+        }
+        if (occupied.size && !window.confirm(
+          `本次将重新填写 ${occupied.size} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？${earlyRan
+            ? "取消会保留这些字段的现有内容，剩下的字段也不再填写，已经先填的不受影响。"
+            : "取消将保留网页现有内容，本次不会写入任何字段。"}AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
+        )) {
+          overwriteDeclined = true;
+          cancelRequested = true;
+          if (earlyRan) {
+            // 先填的已经写上了：剩下的不再填写，先填的照常同步，结果按部分完成算。
+            await finalSyncFillSession(session);
+            throw new Error(`已取消后续填写，已有内容的字段没有改动。此前已填写 ${filledCount} 项，请核对网页。`);
+          }
+          showStatus("已取消填写，网页现有内容未修改。", "error", true);
+          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
+          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
+            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+        }
+        // 要再试的：先填那次记下的没填上撤掉，以这次的结果为准。
+        for (const item of retry) {
+          const control = unfilledControls.indexOf(item.control);
+          if (control >= 0) unfilledControls.splice(control, 1);
+          const label = unfilledLabels.lastIndexOf(item.label);
+          if (label >= 0) unfilledLabels.splice(label, 1);
+        }
+        queue.push(...later);
+        return null;
+      };
+      if (early.length) {
+        queue.push(...early);
+        waitingAi = true;
+        stage = "fill";
+        earlyFrom = performance.now();
+      } else {
+        const declined = await settleAi();
+        if (declined) return declined;
+      }
       for (let position = 0; ; position++) {
+        // 先填的本地匹配填完了（#402）：等 AI 回来，把剩下的字段排进来接着填。新出现字段的补填还在这之后。
+        if (position >= queue.length && waitingAi) await settleAi();
+        // AI 这一步的字段也填完了：先填过的字段被页面清回点击时的样子（上面的选择变了，页面清空下面的），
+        // 按原值再填一次，和原来从上往下填的结果一样。只看这一遍。
+        if (position >= queue.length && intactEarly.length && isCurrent()) {
+          for (const item of intactEarly.splice(0)) {
+            const fresh = isFieldBindingCurrent(item.element) ? item.element : rebindFieldEntry(item.element);
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            const index = verifiedControls.indexOf(item);
+            if (now === null || now !== approvedValues.get(item.element) || now === item.after || index < 0) continue;
+            // 换成这次重填的记账：先前那次不再算填上，也不再复核。
+            verifiedControls.splice(index, 1);
+            filledCount -= 1;
+            if (item.isNew) supplemented -= 1;
+            if (item.element.kind === "element" && dayDefaultedControls.has(item.element.element)) dayDefaulted -= 1;
+            queue.push(early.find(match => match.fieldId === item.fieldId));
+          }
+        }
         if (position >= queue.length) {
           // 停下来的、两轮补填用完的、首轮 AI 已经失败的：排队的新字段不再发出，循环后统一收尾。
-          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown) break;
+          // 用户取消了 AI 等待（#402）：先填时选出来的新字段也不再发 AI，请用户自己补。
+          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown || diagnostics.errorCode === "cancelled") break;
           catchUpRounds += 1;
           const batch = pendingNew.splice(0);
           button.textContent = "正在补填新出现的字段...";
@@ -2918,12 +3129,14 @@
         const choice = entry => CHOICE_CONTROL_KINDS.has(entry.kind === "radio" ? "radio" : entry.controlKind);
         const pair = element.binding?.item?.parentElement;
         const inPair = entry => { const node = entry.kind === "radio" ? entry.elements?.[0] : entry.element; return Boolean(node) && pair.contains(node); };
+        // 先填阶段（#402）另一半可能还在等 AI，不在 queue 里。
         const partner = !assisted && !deep && pair && choice(element) && [...new Set(fieldMap.values())].filter(inPair).length === 2
-          ? queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)).find(other => other && other !== element && choice(other)
+          ? [...queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)), ...(waitingAi ? awaiting : [])]
+            .find(other => other && other !== element && choice(other)
             && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
           : null;
         const partnerBefore = partner ? fillValueSnapshot(partner) : null;
-        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
         stopInterruptedControl();
         // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
         // 内容和填写前一样（重建冲掉了这次写入）就在新字段上重做一次；显示的正是刚选的值就算填上；
@@ -2936,7 +3149,7 @@
             approvedValues.set(fresh, approved);
             fieldMap.set(match.fieldId, fresh);
             element = fresh;
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
           } else if (fresh && showsFilledValue(fresh, match.value)) {
             approvedValues.set(fresh, now);
@@ -2949,19 +3162,19 @@
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           // 日期控件显示的是组件自己的格式（猎聘是「1998年06月」）：交给控件层按面板精度复核，不逐字比较（#236）。
-          // 手机号框自己加了空格、短横的按数字比（#229）。节点被页面替换的，都算未确认。
+          // 手机号框自己加了空格、短横的按数字比（#229），日期样式的文本框按年月日比（#399）。节点被页面替换的，都算未确认。
           filled = element.element.isConnected && (element.pickerType
             ? Boolean(controlOperator?.check(element)?.ok)
-            : sameTextValue(element.element, String(element.element.value ?? ""), normalizeExpectedTextValue(element.element, match.value)));
+            : showsPreparedText(element.element, String(element.element.value ?? ""), match.value));
         }
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
         // 也按同样的方式等一等（和 worker 放行它用的是同一个判断）；选项出来了却对不上，不再白等。
-        if (!filled && element.kind === "element" && element.element instanceof HTMLSelectElement
+        if (!filled && element.kind === "element" && isSelectElement(element.element)
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
@@ -2971,16 +3184,33 @@
           filledCount += 1;
           if (newFieldIds.has(match.fieldId)) supplemented += 1;
           if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId) });
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId),
+            fieldId: match.fieldId });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
           }
         } else {
+          // #399 #405 写入被拒的文本框：前 3 个看满 1 秒有没有冒出弹层再填下一个，免得把下一个字段的弹层算到它头上。
+          // 再往后的不等：下一个字段开始时停下，没看到弹层就不报。按停止时马上不等（见停止按钮）。
+          if (!assisted && TEXT_REJECTED.has(textFillFailureCode(element)) && overlayWaits < OVERLAY_WAITS) {
+            overlayWaits += 1;
+            await overlayWatches.get(element.element)?.settled;
+          }
           // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
-          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+          const reason = textFillFailureCode(element);
+          if (!assisted && reason === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
-          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          } else {
+            const labels = unfilledLabels.length;
+            const controls = unfilledControls.length;
+            noteControlFailure(element, fieldMeta, match.value, reason);
+            // #402 先填时选项还没出来：照常记下没填上，AI 回来后再试一次（见 settleAi）。联动组的下一级会被挡住，不算。
+            if (waitingAi && OPTIONS_LATE.has(reason) && fieldMeta?.cascadeGroup === undefined && early.includes(match)
+              && unfilledLabels.length > labels) {
+              earlyRetry.push({ match, label: unfilledLabels[labels], control: unfilledControls[controls] });
+            }
+          }
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -2994,9 +3224,12 @@
         }
 
         if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
-          await pickUpNewFields(position);
+          await pickUpNewFields(position, entryDocument(element));
           const partnerNow = partner ? fillValueSnapshot(partner) : null;
-          if (partnerNow !== null && partnerNow !== partnerBefore) approvedValues.set(partner, partnerNow);
+          if (partnerNow !== null && partnerNow !== partnerBefore) {
+            approvedValues.set(partner, partnerNow);
+            if (waitingAi) pageFilled.add(partner);
+          }
         }
       }
       // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。
@@ -3017,14 +3250,15 @@
         const entry = fieldMap.get(field.fieldId);
         return isFieldBindingCurrent(entry) || Boolean(rebindFieldEntry(entry));
       });
-      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length ? "partial" : "success";
+      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length || kept.length ? "partial" : "success";
       const supplementNote = (supplemented ? `（其中新出现的字段补填 ${supplemented} 项）` : "")
         + (dayDefaulted ? `（${dayDefaulted} 项日期资料里只有年月，已按 1 日填写）` : "");
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
         + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '')
         + (grownLeft.length ? `新出现的 ${grownLeft.length} 项没有补填：${summarizeLabels(grownLeft.map(field => field.label))}，请手动补上。`
-          + (grownWarning !== response.warning ? grownWarning : '') : '');
+          + (grownWarning !== response.warning ? grownWarning : '') : '')
+        + (kept.length ? `等 AI 时有改动的 ${kept.length} 项没有覆盖：${summarizeLabels(kept)}，请核对。` : '');
       const emptyHint = viewModeHint();
       const recipeLead = !deep && recipeUse?.status === "hit" ? "已按本站配方定位字段。" : "";
       const recipeTail = !deep && recipeUse?.status === "stale" ? "本站配方可能已过期，可以重新深度分析。" : "";
@@ -3071,10 +3305,15 @@
         if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
     } catch (error) {
+      // 先填（#402）已经写上了几项、AI 这一步才出错：先填的文字照常做最后一次同步，和拒绝覆盖时一样。
+      // 这不是停止，用户没让停下写入。
+      if (stage === "match" && filledCount > 0) await finalSyncFillSession(session);
       // Interrupted fills still get a read-only final count; never replay focus,
       // write, or retry after a stop/overwrite refusal.
       recheckVerifiedControls();
-      if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
+      // 先填已经写上了几项：也是部分完成，并说清网页上已经填了几项。
+      const filledEarly = stage === "match" && filledCount > 0;
+      if (stage === "fill" || filledEarly) outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       if (!scanDone) {
         // #408 扫描还没做完就出错，或控件一个都没读出来（「没找到输入框」在扫描完成之后才报）：上报错误类型和
@@ -3086,6 +3325,7 @@
         hinted = true;
       } else {
         failure = error.message || "AI 填写失败。";
+        if (filledEarly) failure += `已先填写 ${filledCount} 项，请核对网页。`;
       }
       if (!deep && recipeUse?.status === "stale") failure += "本站配方可能已过期，可以重新深度分析。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
@@ -3102,7 +3342,16 @@
       }
       if (waitHint) waitHint.hidden = true;
       if (timer !== null) window.clearInterval(timer);
-      if (phase) timing[phase] = performance.now() - phaseStart;
+      // 先填时出错或被停下（#402）：后台还在等的 AI 请求一并取消，不让它白等到超时。
+      if (aiPending) {
+        aiPending = false;
+        try { Promise.resolve(self.ResumeProAIClient.cancel(requestId)).catch(() => {}); } catch { /* the request ends on its own */ }
+      }
+      // 填写耗时 = 先填的时间 + AI 回来后填写的时间；等 AI 的时间算在匹配里。
+      if (earlyFrom !== null) earlyFillMs = performance.now() - earlyFrom;
+      if (phase) timing[phase] = (phase === "roundTripMs" && aiDoneAt !== null ? aiDoneAt : performance.now()) - phaseStart
+        + (phase === "fillMs" ? earlyFillMs : 0);
+      if (timing.fillMs === null && earlyFillMs) timing.fillMs = earlyFillMs;
       const totalMs = performance.now() - totalStart;
       // #408 扫描出错时补跑页面探测和输入框计数，报告里照样有页面结构。没扫完，谈不上并入同一控件。
       if (!scanDone && !probe) {
@@ -3128,7 +3377,7 @@
       const summaryInput = { ...timing, totalMs,
         fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
-        entry, pageFocused, genericCustom, genericLocked, scanFault,
+        entry, pageFocused, genericCustom, genericLocked, scanFault, earlyFilled, keptCount: kept.length,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -3214,7 +3463,10 @@
       try { return feedback?.labelSources?.(stats) || []; } catch { return []; }
     })();
     const offer = stats.offerSkipped;
+    const count = (value) => Number.isInteger(value) && value > 0 ? value : 0;
     return [
+      // #400 一键填写进了同源框架：扫了几个框架、其中来的字段有几个。
+      ...(count(stats.frames) ? [`同源框架：扫描 ${count(stats.frames)} 个，其中的字段 ${count(stats.frameFields)} 个`] : []),
       ...(sources.length ? [`字段名来源：${sources.map(([key, value]) => `${sourceLabels[key] || key} ${value}`).join("、")}`] : []),
       ...(offer ? [`「加到我的信息」没问：同名找不到区块 ${offer.ambiguous || 0}；经历类区块 ${offer.entry || 0}`] : [])
     ];
@@ -3252,8 +3504,9 @@
     })();
     const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
       popup_internal: "下拉内部输入", grouped: "并入同一控件", page_chrome: "页头导航", site_search: "站内搜索",
-      outside_form: "表单外", no_label: "对不上题目", scan_error: "读取出错", out_of_scope: "不在新增范围", secret: "疑似密码",
-      no_resume_mapping: "无对应资料", ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+      outside_form: "表单外", no_label: "对不上题目", scan_error: "读取出错", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
+      ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", changed_while_waiting: "等 AI 时有改动",
+      not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
     const pageType = result.pageType
       ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
         url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`
@@ -3284,6 +3537,8 @@
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
       `API（含响应读取）：${called === true ? seconds(d.apiMs) : called === false ? "未调用" : "未取得"}`,
       `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
+      // #402 AI 返回前先填上的项数；只在本机显示。
+      ...(Number.isInteger(result.earlyFilled) && result.earlyFilled > 0 ? [`AI 返回前先填：${result.earlyFilled} 项`] : []),
       ...(result.deep ? formatDeepDiagnostics(result.deep) : []),
       ...(result.recipe ? [formatRecipeDiagnostics(result.recipe, d)] : []),
       ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
@@ -3371,16 +3626,105 @@
     panel.open = true;
   }
 
+  // #400 同源框架里的元素属于框架自己的 window：对顶层的 HTMLInputElement 做 instanceof 是 false。
+  // 先按当前 window 的构造函数判断，再按元素所在 window 的；document、样式、选区也都用元素所在的那一份。
+  function viewOf(node) {
+    return node?.ownerDocument?.defaultView || window;
+  }
+
+  function docOf(node) {
+    return node?.ownerDocument || document;
+  }
+
+  function isElementOf(node, Local, name) {
+    if (!node || typeof node !== "object") return false;
+    if (typeof Local === "function" && node instanceof Local) return true;
+    const Own = node.ownerDocument?.defaultView?.[name];
+    return typeof Own === "function" && Own !== Local && node instanceof Own;
+  }
+
+  function isInputElement(node) {
+    return isElementOf(node, HTMLInputElement, "HTMLInputElement");
+  }
+
+  function isTextAreaElement(node) {
+    return isElementOf(node, HTMLTextAreaElement, "HTMLTextAreaElement");
+  }
+
+  function isSelectElement(node) {
+    return isElementOf(node, HTMLSelectElement, "HTMLSelectElement");
+  }
+
+  function isHtmlElement(node) {
+    return isElementOf(node, HTMLElement, "HTMLElement");
+  }
+
+  // 元素还在网页上：在它自己的文档里，框架的文档也还挂在页面上（框架被删掉后它的 window 就没了）。
+  function inPage(node) {
+    const doc = docOf(node);
+    if (doc === document) return document.contains(node);
+    return Boolean(doc.defaultView) && doc.contains(node);
+  }
+
+  // #400 一键填写可能要扫的文档：顶层，加上看得见、够大的同源框架（最多两层，见 field-scan.js 的 frameDocuments）。
+  // 外层在前，parent 是装着这个框架的文档。框架读不了就只有顶层。侧栏只在顶层。
+  function fillDocuments() {
+    let frames = [];
+    try {
+      frames = self.ResumeProFieldScan?.frameDocuments?.(document, {
+        isVisible,
+        exclude: (element) => Boolean(element.closest?.(`#${SIDEBAR_ID}`))
+      }) || [];
+    } catch {
+      frames = [];
+    }
+    return [{ doc: document, parent: null }, ...frames];
+  }
+
   // #228：扫描交给 field-scan.js。只收能对上题目的逻辑控件：自定义下拉连同内部输入算一个，
   // 页头搜索、下拉弹层里的搜索框、对不上题目的控件都跳过，只在诊断里记数量。
+  // #400 顶层扫不到字段时，接着扫它里面的同源框架；框架也一样，自己扫不到字段才进下一层。顶层表单旁边的客服、
+  // 留言框架不碰。字段编号带框架序号（frame1-field-12）；框架正在跳转、扫描出错就跳过它。
   function scanFillableFields() {
-    const scan = self.ResumeProFieldScan.scanPage(document, {
+    const options = {
       isVisible,
       exclude: (element) => Boolean(element.closest(`#${SIDEBAR_ID}`))
-    });
+    };
     const fieldMap = new Map();
     const fields = [];
+    const scans = [];
+    // 扫过的文档各扫到几个字段。
+    const yielded = new Map();
+    fillDocuments().forEach(({ doc, parent }, index) => {
+      if (parent && yielded.get(parent) !== 0) return;
+      let scan;
+      if (!index) {
+        scan = self.ResumeProFieldScan.scanPage(doc, options);
+      } else {
+        try {
+          scan = self.ResumeProFieldScan.scanPage(doc, options);
+        } catch {
+          return;
+        }
+        // 框架里的焦点和提交按钮：顶层 document 上的监听收不到，给它的 document 补上。
+        watchFrameDocument(doc);
+      }
+      yielded.set(doc, scan.controls.length);
+      scans.push({ doc, scan, before: fields.length });
+      addScannedControls(scan, fields, fieldMap, index ? `frame${index}-` : "");
+    });
 
+    // 级联判断 (Cascade Detection)
+    if (self.ResumeProAIHelpers?.detectCascadeGroups) {
+      self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
+    }
+
+    // fault：逐项跳过时第一个出错的原因（#408），只给一键填写上报用，不进诊断。unreadable：有文档的控件一个都没读出来。
+    return { fields, fieldMap, stats: scanStats(scans, fields.length), fault: scans.find(({ scan }) => scan.fault)?.scan.fault || null,
+      unreadable: scans.some(({ scan }) => scan.unreadable) };
+  }
+
+  function addScannedControls(scan, fields, fieldMap, prefix) {
     scan.controls.forEach((control) => {
       const element = control.element;
       // 扫描时的对应关系原样留着，填写和「加到我的信息」用之前拿它复查。
@@ -3398,7 +3742,7 @@
       };
 
       if (control.kind === "radio") {
-        const fieldId = `field-radio-${fields.length}`;
+        const fieldId = `${prefix}field-radio-${fields.length}`;
         fieldMap.set(fieldId, { kind: "radio", elements: control.elements, ...common });
         fields.push({
           fieldId, ...base, placeholder: "", name: element.name || "", idAttr: "",
@@ -3408,7 +3752,7 @@
         return;
       }
 
-      const fieldId = `field-${fields.length}`;
+      const fieldId = `${prefix}field-${fields.length}`;
       if (control.controlKind === "date-picker") {
         const pickerType = control.pickerType || "generic";
         const pickerInputType = inferPickerInputType(control.root, element);
@@ -3428,47 +3772,52 @@
         idAttr: element.id || "",
         tagName: element.tagName.toLowerCase(),
         inputType: ["custom-select", "cascader"].includes(control.controlKind) ? "select"
-          : element instanceof HTMLInputElement ? element.type || "text" : element.tagName.toLowerCase(),
-        options: element instanceof HTMLSelectElement
+          : isInputElement(element) ? element.type || "text" : element.tagName.toLowerCase(),
+        options: isSelectElement(element)
           ? Array.from(element.options).map((option) => option.text.trim()).filter(Boolean)
           : []
       });
     });
-
-    // 级联判断 (Cascade Detection)
-    if (self.ResumeProAIHelpers?.detectCascadeGroups) {
-      self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
-    }
-
-    // fault：逐项跳过时第一个出错的原因（#408），只给一键填写上报用，不进诊断。unreadable：控件一个都没读出来。
-    return { fields, fieldMap, stats: scanStats(scan, fields.length), fault: scan.fault || null, unreadable: Boolean(scan.unreadable) };
   }
 
   // 诊断漏斗（#215 / #228）：页面上全部输入框按「为什么没进入匹配」分开数。只数数，不读值。
   // 隐藏、按钮或文件框、禁用、看不见按 DOM 数；看得见的再按 field-scan.js 的跳过原因分，
   // 剩下没单列的是并进同一个控件的输入框（一组单选、自定义下拉里的几个输入框算一个）。
-  function scanStats(scan, fields) {
-    const all = Array.from(document.querySelectorAll("input, select, textarea")).filter((element) => !element.closest?.(`#${SIDEBAR_ID}`));
+  // #400 scans 是这次扫过的每个文档（顶层和同源框架）和它的扫描结果，各项按文档加起来；没有扫描结果时（深度填写）数顶层和看得见的同源框架。
+  // frameFields：其中来自框架的字段数；frameUntitled：框架里看得见、却认不出题目的控件数（扫描的 noLabel，认成站内搜索、
+  // 页头页脚的不算）。都只给侧栏诊断、零字段提示和深度分析入口用，不进上报。
+  function scanStats(scans, fields) {
+    const list = scans || fillDocuments().map(({ doc }) => ({ doc, scan: null, before: 0 }));
+    const all = list.flatMap(({ doc }) => Array.from(doc.querySelectorAll("input, select, textarea")))
+      .filter((element) => !element.closest?.(`#${SIDEBAR_ID}`));
     let typeHidden = 0;
     let nonFillable = 0;
     let disabled = 0;
     let visible = 0;
     for (const element of all) {
-      const type = element instanceof HTMLInputElement ? String(element.type || "").toLowerCase() : "";
+      const type = isInputElement(element) ? String(element.type || "").toLowerCase() : "";
       if (type === "hidden") typeHidden += 1;
       else if (["file", "button", "submit", "reset", "image"].includes(type)) nonFillable += 1;
       else if (element.disabled) disabled += 1;
       else if (isVisible(element)) visible += 1;
     }
     const count = (value) => Number.isInteger(value) && value > 0 ? value : 0;
-    const skipped = scan?.skipped || {};
-    const listed = { popup: count(skipped.popup), pageChrome: count(skipped.pageChrome), siteSearch: count(skipped.siteSearch),
-      outsideForm: count(skipped.outsideForm), noLabel: count(skipped.noLabel), scanError: count(skipped.scanError) };
+    const sum = (read) => list.reduce((total, { scan }) => total + count(read(scan || {})), 0);
+    const listed = { popup: sum((scan) => scan.skipped?.popup), pageChrome: sum((scan) => scan.skipped?.pageChrome),
+      siteSearch: sum((scan) => scan.skipped?.siteSearch), outsideForm: sum((scan) => scan.skipped?.outsideForm),
+      noLabel: sum((scan) => scan.skipped?.noLabel), scanError: sum((scan) => scan.skipped?.scanError) };
     const listedTotal = Object.values(listed).reduce((total, value) => total + value, 0);
+    const sources = {};
+    for (const { scan } of list) {
+      for (const [key, value] of Object.entries(scan?.sources || {})) sources[key] = (sources[key] || 0) + count(value);
+    }
+    const frames = list.slice(1).filter(({ scan }) => scan);
     return { domInputs: all.length, visible, typeHidden, nonFillable, disabled,
       invisible: all.length - typeHidden - nonFillable - disabled - visible, ...listed,
       grouped: Math.max(0, visible - fields - listedTotal),
-      sources: scan?.sources || {}, ambiguous: count(skipped.ambiguous) };
+      sources, ambiguous: sum((scan) => scan.skipped?.ambiguous),
+      frames: frames.length, frameFields: frames.length ? Math.max(0, fields - frames[0].before) : 0,
+      frameUntitled: frames.reduce((total, { scan }) => total + count(scan.skipped?.noLabel), 0) };
   }
 
   // 题目和控件的对应关系还成立吗：控件还在原来的表单项里、表单项没混进别的控件、题目没变。
@@ -3487,7 +3836,7 @@
     try {
       if (entry.kind === "radio") {
         const checked = entry.elements.find(radioChecked);
-        return Boolean(checked) && matches([checked instanceof HTMLInputElement ? getRadioOptionLabel(checked) : checked.textContent.trim()]);
+        return Boolean(checked) && matches([isInputElement(checked) ? getRadioOptionLabel(checked) : checked.textContent.trim()]);
       }
       const el = entry.element;
       if (["custom-select", "cascader"].includes(entry.controlKind)) {
@@ -3496,10 +3845,10 @@
         if (/^\s*\d{4}\s*[-./年]\s*\d{1,2}/.test(String(value))) return texts.length === 1 && sameDateAsPage(texts[0], value);
         return matches(texts);
       }
-      if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
+      if (isSelectElement(el)) return matches([el.options[el.selectedIndex]?.text || ""]);
       const shown = String(el.value ?? "");
       if (entry.pickerType || entry.controlKind === "date") return sameDateAsPage(shown, value);
-      return shown === normalizeExpectedTextValue(el, value);
+      return showsPreparedText(el, shown, value);
     } catch {
       return false;
     }
@@ -3518,10 +3867,10 @@
   }
 
   // 等页面对上一个选择的反应结束：增删节点或样式、显示/隐藏、class 连续 300ms 没有变化，最多等 1.5s。
-  // 插件自己的侧栏和填写高亮不算。
-  function waitForPageSettle(quietMs = 300, maxMs = 1500) {
+  // 插件自己的侧栏和填写高亮不算。只看刚选的控件所在的文档（#400 同源框架里的控件看框架的），别的框架里的轮播、时钟不用等。
+  function waitForPageSettle(doc = document, quietMs = 300, maxMs = 1500) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
-    const root = document.body || document.documentElement;
+    const root = doc?.body || doc?.documentElement;
     if (!Observer || !root?.nodeType) return Promise.resolve();
     return new Promise((resolve) => {
       const start = performance.now();
@@ -3544,6 +3893,8 @@
   // （藏着的表单显示出来），之后 300ms 没有再增删节点，就用 rescan 扫一次。扫到字段就结束；扫不到（先出来的是
   // 页头搜索框、客服框架这类）就接着等，最多等 2s，到上限时还有没扫过的变化就再扫一次。不轮询；插件自己的侧栏不算。
   // 网址变了（换页、跳到登录页）就不等了，也不扫。没有 MutationObserver 时立即返回。扫到字段时返回那次的扫描结果，否则 null。
+  // #400 同源框架里的变化一起看，框架加载完（换了一份文档）也算网页有了变化。顶层和扫得到的框架里的 iframe 都听 load，
+  // 等待开始后才插进来的、框架换页后新文档里的也一样。
   const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
   function waitForNewControls(href, rescan, settleMs = 300, maxMs = 2000) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
@@ -3557,20 +3908,59 @@
       const isControl = (node) => node?.nodeType === 1 && !ours(node)
         && Boolean(node.matches?.(NEW_CONTROL_SELECTOR) || node.querySelector?.(NEW_CONTROL_SELECTOR));
       const fresh = (record) => record.type === "attributes" ? isControl(record.target) : Array.from(record.addedNodes || []).some(isControl);
-      const observer = new Observer((records) => {
-        if (location.href !== href) {
-          finish(null);
-          return;
-        }
-        // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
-        if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
+      const changed = () => {
         seen = true;
         window.clearTimeout(settle);
         settle = window.setTimeout(() => {
           const scanned = scan();
           if (scanned) finish(scanned);
         }, settleMs);
+      };
+      const observer = new Observer((records) => {
+        if (location.href !== href) {
+          finish(null);
+          return;
+        }
+        for (const record of records) {
+          for (const node of record.addedNodes || []) if (node?.nodeType === 1 && !ours(node)) watchFrames(node);
+        }
+        // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
+        if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
+        changed();
       });
+      const frames = new Set();
+      const frameLoaded = () => {
+        if (location.href !== href) return;
+        // 新文档里的变化也要看到，它里面的框架也要听。
+        followFrames();
+        changed();
+      };
+      // node 自己或里面的 iframe 加载完时再扫。
+      const watchFrames = (node) => {
+        let found = [];
+        try {
+          found = [...(node.matches?.("iframe, frame") ? [node] : []), ...(node.querySelectorAll?.("iframe, frame") || [])];
+        } catch {
+          found = [];
+        }
+        for (const frame of found) {
+          if (frames.has(frame) || typeof frame.addEventListener !== "function") continue;
+          frame.addEventListener("load", frameLoaded);
+          frames.add(frame);
+        }
+      };
+      const observed = new Set();
+      const observeRoot = (node) => {
+        if (!node?.nodeType || observed.has(node)) return;
+        observed.add(node);
+        observer.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
+      };
+      const followFrames = () => {
+        for (const { doc } of fillDocuments().slice(1)) {
+          observeRoot(doc.documentElement);
+          watchFrames(doc);
+        }
+      };
       function scan() {
         seen = false;
         if (location.href !== href) return null;
@@ -3583,13 +3973,27 @@
       }
       function finish(scanned) {
         observer.disconnect();
+        for (const frame of frames) frame.removeEventListener?.("load", frameLoaded);
         window.clearTimeout(settle);
         window.clearTimeout(cap);
         resolve(location.href === href ? scanned : null);
       }
-      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
+      observeRoot(root);
+      watchFrames(document);
+      followFrames();
       cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
+  }
+
+  // 字段所在的文档：同源框架里的字段（#400）在框架自己的文档里找、复查。
+  function entryDocument(entry) {
+    const node = entry?.binding?.item || entry?.element || entry?.elements?.[0];
+    return docOf(node);
+  }
+
+  // 同源框架换了页或被删掉（#400）：旧文档没有 window 了，里面的元素 isConnected 却还是 true。
+  function documentGone(doc) {
+    return Boolean(doc) && doc !== document && !doc.defaultView;
   }
 
   // #269 页面重画后找回同一个字段：同一控件类型、同一区块、同一题目、同名题目的序号和总数都一样，并且只找到一个。
@@ -3599,7 +4003,7 @@
     if (!old?.label || entry.deepRef) return null;
     let scan;
     try {
-      scan = self.ResumeProFieldScan.scanPage(document, { isVisible, exclude: (element) => Boolean(element.closest(`#${SIDEBAR_ID}`)) });
+      scan = self.ResumeProFieldScan.scanPage(entryDocument(entry), { isVisible, exclude: (element) => Boolean(element.closest(`#${SIDEBAR_ID}`)) });
     } catch {
       return null;
     }
@@ -3617,7 +4021,7 @@
   function isFieldBindingCurrent(entry) {
     if (!entry?.binding) return true;
     try {
-      return self.ResumeProFieldScan.isBindingCurrent(entry.binding, document, { isVisible });
+      return self.ResumeProFieldScan.isBindingCurrent(entry.binding, entryDocument(entry), { isVisible });
     } catch {
       return false;
     }
@@ -3644,37 +4048,85 @@
   }
 
   function bindFocusTracking() {
+    bindFocusListeners(document);
+    // #400 焦点进了同源框架：顶层只收到 window 的 blur，activeElement 变成框架元素。
+    window.addEventListener("blur", () => followFocusIntoFrame(document));
+  }
+
+  // 用户最后点过的字段。提交前同步会短暂聚焦已填字段，不能把它们当成用户最后点过的字段。
+  function noteFocusedTarget(target) {
+    if (submitSyncBusy || !isHtmlElement(target) || target.closest?.(`#${SIDEBAR_ID}`) || !isFillTarget(target)) return;
+    state.lastFocusedField = target;
+    closeChipActionMenu();
+    rememberTextSelection(target);
+    syncChipSelectionState();
+    notifyPanelTargetChanged();
+  }
+
+  // #400 同源框架里的焦点和提交按钮：顶层 document 上的监听收不到框架里的事件，给框架的 document 补上同样的监听
+  // （一键填写扫到它时，或焦点进了它时）。框架换了文档就是新的 document，到时再补。
+  const watchedFrameDocs = new WeakSet();
+  function watchFrameDocument(doc) {
+    if (!doc || doc === document || watchedFrameDocs.has(doc) || typeof doc.addEventListener !== "function") return;
+    watchedFrameDocs.add(doc);
+    try {
+      bindFocusListeners(doc);
+      for (const type of ["pointerdown", "keydown", "click"]) doc.addEventListener(type, handleSubmitGesture, true);
+      doc.defaultView?.addEventListener?.("blur", () => followFocusIntoFrame(doc));
+    } catch {
+      // 框架正在跳转：下次扫描或聚焦时再补。
+    }
+  }
+
+  // 焦点从 doc 进了它里面的同源框架（最多两层）：补上监听，等框架里的元素拿到焦点后记下来。
+  function followFocusIntoFrame(doc) {
+    let current = doc;
+    for (let depth = 0; depth < 2; depth += 1) {
+      const frame = current.activeElement;
+      if (!/^(?:IFRAME|FRAME)$/.test(frame?.tagName || "")) break;
+      let inner = null;
+      try {
+        inner = frame.contentDocument;
+      } catch {
+        inner = null;
+      }
+      if (!inner) break;
+      watchFrameDocument(inner);
+      current = inner;
+    }
+    if (current === doc) return;
+    window.setTimeout(() => {
+      const active = frameActiveElement();
+      if (docOf(active) !== document) noteFocusedTarget(active);
+    }, 0);
+  }
+
+  // 拿着焦点的元素，进同源框架（最多两层），不进 Shadow DOM（和顶层的 document.activeElement 一样）。
+  function frameActiveElement() {
+    let active = document.activeElement;
+    for (let depth = 0; depth < 2 && /^(?:IFRAME|FRAME)$/.test(active?.tagName || ""); depth += 1) {
+      let inner = null;
+      try {
+        inner = active.contentDocument?.activeElement || null;
+      } catch {
+        inner = null;
+      }
+      if (!inner) break;
+      active = inner;
+    }
+    return active || null;
+  }
+
+  function bindFocusListeners(doc) {
     const trackedTarget = (event) => {
-      const candidate = event.target instanceof HTMLElement && isFillTarget(event.target)
-        ? event.target : document.activeElement;
-      return candidate instanceof HTMLElement && isFillTarget(candidate) && !candidate.closest?.(`#${SIDEBAR_ID}`)
+      const candidate = isHtmlElement(event.target) && isFillTarget(event.target)
+        ? event.target : doc.activeElement;
+      return isHtmlElement(candidate) && isFillTarget(candidate) && !candidate.closest?.(`#${SIDEBAR_ID}`)
         ? candidate : null;
     };
-    document.addEventListener("focusin", (event) => {
-      // 提交前同步会短暂聚焦已填字段，不能把它们当成用户最后点过的字段。
-      if (submitSyncBusy) {
-        return;
-      }
-      const target = event.target;
-
-      if (!(target instanceof HTMLElement)) {
-        return;
-      }
-
-      if (target.closest(`#${SIDEBAR_ID}`)) {
-        return;
-      }
-
-      if (isFillTarget(target)) {
-        state.lastFocusedField = target;
-        closeChipActionMenu();
-        rememberTextSelection(target);
-        syncChipSelectionState();
-        notifyPanelTargetChanged();
-      }
-    }, true);
+    doc.addEventListener("focusin", (event) => noteFocusedTarget(event.target), true);
     // 失焦前最后记一次：点侧栏之后，contenteditable 的选区可能已经不在了。
-    document.addEventListener("focusout", (event) => {
+    doc.addEventListener("focusout", (event) => {
       const target = trackedTarget(event);
       if (target) rememberTextSelection(target);
     }, true);
@@ -3684,10 +4136,10 @@
       rememberTextSelection(target);
       if (target === state.lastFocusedField) notifyPanelTargetChanged();
     };
-    document.addEventListener("selectionchange", trackCaret, true);
-    document.addEventListener("keyup", trackCaret, true);
-    document.addEventListener("mouseup", trackCaret, true);
-    document.addEventListener("input", (event) => {
+    doc.addEventListener("selectionchange", trackCaret, true);
+    doc.addEventListener("keyup", trackCaret, true);
+    doc.addEventListener("mouseup", trackCaret, true);
+    doc.addEventListener("input", (event) => {
       // 用户手动改过、或页面自己改过：按值重新推断，不再沿用之前记的字段身份。
       // 我们自己写入时不清，写完由 applyChipValue 收尾。
       if (event.target && !chipWriteTargets.has(event.target)) {
@@ -3721,10 +4173,10 @@
   }
 
   function getLastFocusedFillTarget() {
-    const candidates = [state.lastFocusedField, document.activeElement];
+    const candidates = [state.lastFocusedField, frameActiveElement()];
 
     for (const candidate of candidates) {
-      if (candidate instanceof HTMLElement && isFillTarget(candidate) && document.contains(candidate)) {
+      if (isHtmlElement(candidate) && isFillTarget(candidate) && inPage(candidate)) {
         return candidate;
       }
     }
@@ -3739,10 +4191,10 @@
   }
 
   function isTextControl(element) {
-    if (element instanceof HTMLTextAreaElement) {
+    if (isTextAreaElement(element)) {
       return true;
     }
-    if (!(element instanceof HTMLInputElement)) {
+    if (!isInputElement(element)) {
       return false;
     }
     const type = String(element.type || "text").toLowerCase();
@@ -3750,7 +4202,7 @@
   }
 
   function prefersSequentialInput(element) {
-    if (!(element instanceof HTMLInputElement)) {
+    if (!isInputElement(element)) {
       return false;
     }
     const type = String(element.type || "").toLowerCase();
@@ -3890,14 +4342,14 @@
       // A custom control may expose a non-standard labels getter. Its other hints still apply.
     }
     const labelledBy = String(element.getAttribute?.("aria-labelledby") || "").split(/\s+/).filter(Boolean);
-    for (const id of labelledBy) parts.push(document.getElementById?.(id)?.textContent);
+    for (const id of labelledBy) parts.push(docOf(element).getElementById?.(id)?.textContent);
     return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   }
 
   // 只有 text / tel / email / textarea 会被记录；密码、验证码、下拉、日期、文件、单选、复选都不碰。
   function isSyncableTextControl(element) {
-    const textarea = element instanceof HTMLTextAreaElement;
-    const input = element instanceof HTMLInputElement;
+    const textarea = isTextAreaElement(element);
+    const input = isInputElement(element);
     if (!textarea && !input) return false;
     if (input && !SYNC_INPUT_TYPES.has(String(element.type || "text").toLowerCase())) return false;
     const hint = controlHintText(element);
@@ -3993,10 +4445,23 @@
     return findSubmitTrigger(target);
   }
 
+  // 真正拿着焦点的元素：进 Shadow DOM，也进同源框架（#400；框架里没有聚焦的元素时就是框架本身）。
   function deepActiveElement() {
     let active = document.activeElement;
-    while (active?.shadowRoot?.activeElement) {
-      active = active.shadowRoot.activeElement;
+    for (let depth = 0; active && depth < 16; depth += 1) {
+      if (active.shadowRoot?.activeElement) {
+        active = active.shadowRoot.activeElement;
+        continue;
+      }
+      if (!/^(?:IFRAME|FRAME)$/.test(active.tagName || "")) break;
+      let inner = null;
+      try {
+        inner = active.contentDocument?.activeElement || null;
+      } catch {
+        inner = null;
+      }
+      if (!inner || inner === inner.ownerDocument?.body) break;
+      active = inner;
     }
     return active || null;
   }
@@ -4005,10 +4470,10 @@
     if (!element) {
       return false;
     }
-    if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+    if (isTextAreaElement(element) || isSelectElement(element)) {
       return true;
     }
-    if (element instanceof HTMLInputElement) {
+    if (isInputElement(element)) {
       return !["button", "submit", "reset", "image", "checkbox", "radio", "file"].includes(String(element.type || "text").toLowerCase());
     }
     return element.isContentEditable === true;
@@ -4075,7 +4540,7 @@
       submitSyncBusy = false;
     }
     // 把焦点还给原来的元素：空格键靠按钮保持焦点才会在松开时触发点击。
-    if (previous && previous !== document.body && previous !== document.documentElement
+    if (previous && previous !== docOf(previous).body && previous !== docOf(previous).documentElement
       && previous.isConnected !== false && deepActiveElement() !== previous) {
       focusControl(previous);
     }
@@ -4262,9 +4727,26 @@
     return "";
   }
 
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：换了前缀的类名再补一份 ant- 的写法，按 antd 的类名比对；
+  // 选择器里的 .ant- 按节点所在文档的前缀展开。
+  function antdClassText(node) {
+    const antd = self.ResumeProAntdPrefix;
+    const text = classText(node);
+    if (!antd || !text) return text;
+    const tokens = text.split(/\s+/);
+    const renamed = tokens.map((token) => antd.token(node, token)).filter((token, index) => token !== tokens[index]);
+    return renamed.length ? `${text} ${renamed.join(" ")}` : text;
+  }
+
+  function antdCss(node, selector) {
+    return self.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  }
+
   function isShown(node) {
     let current = node;
-    while (current && current !== document) {
+    const doc = docOf(node);
+    const view = viewOf(node);
+    while (current && current !== doc) {
       if (current.hidden) {
         return false;
       }
@@ -4275,8 +4757,8 @@
       if (current.getAttribute?.("aria-hidden") === "true") {
         return false;
       }
-      if (typeof window.getComputedStyle === "function" && current instanceof HTMLElement) {
-        const style = window.getComputedStyle(current);
+      if (typeof view.getComputedStyle === "function" && isHtmlElement(current)) {
+        const style = view.getComputedStyle(current);
         if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") {
           return false;
         }
@@ -4287,7 +4769,7 @@
   }
 
   function looksLikeFieldError(node) {
-    if (!node || node === document.body) {
+    if (!node || node === docOf(node).body) {
       return false;
     }
     if (node.getAttribute?.("role") === "alert") {
@@ -4295,7 +4777,7 @@
     }
     const className = classText(node);
     return /(?:^|[\s_])(?:error|has-error|is-error|is-invalid|invalid-feedback|field-error|form-error)(?:$|[\s_])/i.test(className)
-      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(className);
+      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(antdClassText(node));
   }
 
   function listOtherControls(root, skip) {
@@ -4303,7 +4785,7 @@
     const stack = [...(root?.children || [])];
     while (stack.length) {
       const node = stack.shift();
-      if (node !== skip && (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement)) {
+      if (node !== skip && (isInputElement(node) || isTextAreaElement(node) || isSelectElement(node))) {
         found.push(node);
       }
       if (node?.children?.length) {
@@ -4322,9 +4804,10 @@
   }
 
   function associatedContainer(element) {
+    const doc = docOf(element);
     let current = element.parentElement;
     let best = current;
-    while (current && current !== document.body && current !== document.documentElement) {
+    while (current && current !== doc.body && current !== doc.documentElement) {
       if (listOtherControls(current, element).length > 0) {
         return best;
       }
@@ -4355,7 +4838,7 @@
       .split(/\s+/)
       .filter(Boolean);
     return ids.some((id) => {
-      const node = document.getElementById?.(id);
+      const node = docOf(element).getElementById?.(id);
       return node && node !== element && isShown(node) && String(node.textContent || "").trim()
         && (looksLikeFieldError(node) || node.getAttribute?.("role") === "alert");
     });
@@ -4384,12 +4867,12 @@
 
   function containerFrameworkUnsynced(element) {
     const container = associatedContainer(element);
-    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
+    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(antdClassText(container));
   }
 
   // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
   // 就是写上了，不能当成没写上，也不能恢复成写之前的值。
-  const PHONE_HINT = /手机|电话|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
+  const PHONE_HINT = /手机|电话|联系方式|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
 
   function phoneDigits(text) {
     const digits = String(text ?? "").replace(/[\s-]/g, "").replace(/^\+86/, "").replace(/^86(?=1\d{10}$)/, "");
@@ -4397,7 +4880,7 @@
   }
 
   function isPhoneInput(element) {
-    if (!(element instanceof HTMLInputElement)) {
+    if (!isInputElement(element)) {
       return false;
     }
     if (String(element.type || "").toLowerCase() === "tel") {
@@ -4411,7 +4894,187 @@
       return true;
     }
     const digits = phoneDigits(current);
-    return Boolean(digits) && digits === phoneDigits(expected) && isPhoneInput(element);
+    if (digits && digits === phoneDigits(expected) && isPhoneInput(element)) {
+      return true;
+    }
+    return sameDateText(current, expected) && isDateLikeText(element);
+  }
+
+  // #399 日期样式的文本框（简道云的「出生年月」不是认得出的日期组件，按文本框填）：组件失焦后常按自己的格式改写，
+  // 1998-06 变成 1998-06-01、1998/06。按年月日比是同一天就是写上了。只认整段就是一个日期的写法。
+  const DATE_TEXT_HINT = /出生|生日|日期|年月|时间|date|birth|time/i;
+
+  function parseDateText(text) {
+    const s = String(text ?? "").normalize("NFKC").trim();
+    const dashed = /^(\d{4})([-/.])(\d{1,2})(?:\2(\d{1,2}))?$/.exec(s);
+    const written = /^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号]?)?$/.exec(s);
+    const year = /^(\d{4})\s*年?$/.exec(s);
+    const [y, m, d] = dashed ? [dashed[1], dashed[3], dashed[4]] : written ? written.slice(1, 4) : year ? [year[1]] : [];
+    if (!y || +y < 1900 || +y > 2100 || (m && (+m < 1 || +m > 12)) || (d && (+d < 1 || +d > 31))) {
+      return null;
+    }
+    return { y, m: m ? m.padStart(2, "0") : null, d: d ? d.padStart(2, "0") : null };
+  }
+
+  // 按页面显示的精度比：只到月就比年月；到日时，资料只有年月按 1 日（和日历选 1 号一致）。只有年的不比。
+  function sameDateText(shown, wanted) {
+    const page = parseDateText(shown);
+    const want = parseDateText(wanted);
+    if (!page?.m || !want?.m || page.y !== want.y || page.m !== want.m) {
+      return false;
+    }
+    return !page.d || page.d === (want.d || "01");
+  }
+
+  function isDateLikeText(element) {
+    if (!isInputElement(element) || !isTextControl(element)) {
+      return false;
+    }
+    return Boolean(datePlaceholderFormat(element)) || DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`);
+  }
+
+  // 占位提示写明的日期格式：YYYY-MM-DD、yyyy/mm、YYYY年MM月、YYYYMMDD 这类，或只给了一个示例日期（例：2020.09）。
+  // 带时分的、写了两个日期的（起止）不算。
+  function datePlaceholderFormat(element) {
+    const hint = String(element?.getAttribute?.("placeholder") || "").normalize("NFKC");
+    // 月、日写在年前面的（MM/DD/YYYY）也不认。
+    if (!hint || /h{1,2}\s*:\s*m{1,2}|\d{1,2}:\d{2}/i.test(hint) || (hint.match(/y{4}/gi) || []).length > 1
+      || /(?<![a-z])[md]{1,2}\s*[-/.]\s*(?:[md]{1,2}\s*[-/.]\s*)?y{4}/i.test(hint)) {
+      return null;
+    }
+    const pattern = /(?<![a-z])y{4}(?:([-/.])(m{1,2})(?:\1(d{1,2}))?|年(m{1,2})月(?:(d{1,2})日)?|(mm)(dd)?)?(?![a-z])/i.exec(hint);
+    if (pattern) {
+      const month = pattern[2] || pattern[4] || pattern[6];
+      const day = pattern[3] || pattern[5] || pattern[7];
+      return { sep: pattern[4] ? "年" : pattern[1] || "", precision: day ? "day" : month ? "month" : "year", pad: !month || month.length === 2 };
+    }
+    // 只给了示例的，框本身得是填日期的（题目、name 或占位提示里有日期、时间这类词），示例也得是一个真日期：
+    // 「期望月薪」的「如：2000.50」是金额。
+    const examples = hint.match(/(?<!\d)(?:19|20)\d{2}(?:([-/.])\d{1,2}(?:\1\d{1,2})?|年\d{1,2}月(?:\d{1,2}日)?)(?!\d)/g) || [];
+    if (examples.length !== 1 || !parseDateText(examples[0]) || !DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`)) {
+      return null;
+    }
+    const example = /^\d{4}(?:([-/.])(\d{1,2})(?:\1(\d{1,2}))?|年(\d{1,2})月(?:(\d{1,2})日)?)$/.exec(examples[0]);
+    const month = example[2] || example[4];
+    return { sep: example[4] ? "年" : example[1], precision: example[3] || example[5] ? "day" : "month", pad: month.length === 2 };
+  }
+
+  // 按占位提示的格式重写资料里的日期。资料只有年月、框要到日时按 1 日（dayDefaulted，状态栏会说明）；认不出的不改。
+  function formatDateText(text, format) {
+    const date = parseDateText(text);
+    if (!date || (format.precision !== "year" && !date.m)) {
+      return null;
+    }
+    if (format.precision === "year") {
+      return { value: date.y };
+    }
+    const part = (value) => format.pad ? value : String(Number(value));
+    const parts = [date.y, part(date.m)];
+    if (format.precision === "day") {
+      parts.push(part(date.d || "01"));
+    }
+    const value = format.sep === "年" ? `${parts[0]}年${parts[1]}月${parts[2] ? `${parts[2]}日` : ""}` : parts.join(format.sep);
+    return format.precision === "day" && !date.d ? { value, dayDefaulted: true } : { value };
+  }
+
+  // #405 数字框（type=number，或 inputmode 是 numeric / decimal）：type=number 会直接清掉不是数字的字，受控组件也常把它们滤掉，
+  // 写进去只会被拒或剩下拼起来的数字。资料带单位的，只在能放心取出时写数字：一个数加一个常见单位（175cm、65 公斤、8000 元/月、3 年），
+  // 而且题目或占位提示没写明别的单位（身高（m）、月薪（千元）、月薪（美元））、别的周期（期望月薪配 8000 元/年）。
+  // 范围、带 k / 万、几个数的都不写，报 format_mismatch 让用户手填。
+  const NUMBER_UNITS = [["cm", "厘米", "公分"], ["kg", "公斤", "千克"], ["元", "rmb", "人民币"], ["岁", "周岁"], ["年"],
+    ["个月", "月"], ["周", "星期"], ["天"], ["小时"], ["分"]];
+  // 题目里写明这些单位时，资料里的单位对不上就不取：取出的数字意思变了。
+  const STATED_UNITS = new Set([...NUMBER_UNITS.flat(), "m", "米", "mm", "毫米", "斤", "g", "克", "千", "千元", "k", "万", "万元", "w", "%"]);
+  // 规则表外、一看就是单位的写法：别的币种（美元、港币、万美元、$）和英制、公里这类。题目写明了这些，资料里的单位总对不上。
+  const OTHER_UNIT = /^(?:[\u4e00-\u9fa5]{0,3}[元币]|美金|英镑|[$€£]|us\$|usd|hkd|eur|gbp|jpy|sgd|英寸|英尺|英里|公里|千米|分米|磅|inch|in|ft|lbs?|km)$/;
+  const unitHintText = (element) => `${element.getAttribute?.("placeholder") || ""} ${element.getAttribute?.("aria-label") || ""} ${getFieldLabel(element)}`
+    .normalize("NFKC").toLowerCase();
+
+  function numericInputKind(element) {
+    if (String(element.type || "").toLowerCase() === "number") {
+      return "number";
+    }
+    return ["numeric", "decimal"].includes(String(element.getAttribute?.("inputmode") || "").trim().toLowerCase()) ? "mode" : "";
+  }
+
+  // 题目、占位提示里括号中或「单位：」后面写明的单位，规则表外的（美元）也记下。括号里还带别的话的（m，必填）按逗号、顿号分段看。
+  function statedUnits(element) {
+    const units = [];
+    for (const hit of unitHintText(element).matchAll(/\(\s*([^()]{1,20}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
+      for (const part of (hit[1] || hit[2]).split(/\s*[,、;]\s*/)) {
+        const unit = part.replace(/^单位\s*:?\s*(?:为|是)?\s*/, "").replace(/\s*(?:\/|每)\s*(?:月|年)$/, "");
+        if (STATED_UNITS.has(unit) || OTHER_UNIT.test(unit)) units.push(unit);
+      }
+    }
+    return units;
+  }
+
+  // 题目、占位提示写明的周期：按月（月薪、元/月、每月）还是按年（年薪、元/年）。都没写的是空的。
+  function statedPeriods(element) {
+    const text = unitHintText(element);
+    return [["月", /月薪|月收入|月工资|(?:\/|每)\s*月|monthly|per month/], ["年", /年薪|年收入|年工资|年包|(?:\/|每)\s*年|annual|yearly|per year/]]
+      .filter(([, pattern]) => pattern.test(text)).map(([period]) => period);
+  }
+
+  // 能放心写进数字框的数字；取不出返回 null。
+  function numericText(element, text) {
+    const raw = String(text ?? "").normalize("NFKC").trim();
+    if (!raw || /^-?\d+(?:\.\d+)?$/.test(raw)) {
+      return raw;
+    }
+    if (isPhoneInput(element) && phoneDigits(raw)) {
+      return phoneDigits(raw);
+    }
+    const hit = /^(¥\s*)?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*([^\d\s.,][^\d]*)?$/.exec(raw);
+    if (!hit) {
+      return null;
+    }
+    const number = `${hit[2].replace(/,/g, "")}${hit[3] || ""}`;
+    const suffix = String(hit[4] || "").trim().toLowerCase();
+    // 资料写了按月还是按年（8000 元/年），题目写明的周期对不上：8000 写进月薪的框意思就错了。
+    const period = /(?:\/|每)\s*(月|年)$/.exec(suffix)?.[1];
+    const periods = period ? statedPeriods(element) : [];
+    if (periods.length && !periods.includes(period)) {
+      return null;
+    }
+    const unit = suffix.replace(/\s*(?:\/|每)\s*(?:月|年)$/, "") || (hit[1] ? "元" : "");
+    if (!unit) {
+      return number;
+    }
+    const group = NUMBER_UNITS.find((words) => words.includes(unit));
+    if (!group || (hit[1] && unit !== "元")) {
+      return null;
+    }
+    return statedUnits(element).every((stated) => group.includes(stated)) ? number : null;
+  }
+
+  // #399 #405 一键填写写之前按框的要求整理要写的字（控件层写之前调用；侧栏、字段卡片手动写入不整理）。
+  // 返回 { value }，日期按 1 日补齐的带 dayDefaulted。type=number 里取不出数字的返回 { reason: "format_mismatch" }，不写。
+  // inputmode 只是给手机键盘的提示，很多框什么都收：先照原样写，numeric 是页面没收下时改写的数字（取不出是 null）。
+  function prepareTextValue(element, value) {
+    const text = String(value ?? "");
+    if (!isInputElement(element)) {
+      return { value: text };
+    }
+    const format = datePlaceholderFormat(element);
+    const prepared = (format && formatDateText(text, format)) || { value: text };
+    const numeric = numericInputKind(element);
+    if (!numeric) {
+      return prepared;
+    }
+    const number = numericText(element, prepared.value);
+    if (numeric === "number") {
+      return number === null ? { reason: "format_mismatch" } : { ...prepared, value: number };
+    }
+    return number === prepared.value.normalize("NFKC").trim() ? prepared : { ...prepared, numeric: number };
+  }
+
+  // 框里显示的是不是一键填写写进去的字：按 prepareTextValue 整理过的，或 inputmode 数字框改写过的数字。
+  function showsPreparedText(element, shown, value) {
+    const prepared = prepareTextValue(element, value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    return sameTextValue(element, shown, normalizeExpectedTextValue(element, typed))
+      || (typeof prepared.numeric === "string" && sameTextValue(element, shown, prepared.numeric));
   }
 
   function inspectTextCommit(element, expected, committedBeforeWait) {
@@ -4449,10 +5112,10 @@
 
   function normalizeExpectedTextValue(element, value) {
     const text = String(value ?? "");
-    if (element instanceof HTMLTextAreaElement) {
+    if (isTextAreaElement(element)) {
       return text.replace(/\r\n?/g, "\n");
     }
-    if (!(element instanceof HTMLInputElement)) {
+    if (!isInputElement(element)) {
       return text;
     }
     const type = String(element.type || "text").toLowerCase();
@@ -4471,7 +5134,7 @@
     if (!controlOperator) controlOperator = self.ResumeProControls.create({
       helpers: self.ResumeProAIHelpers, radioLabel: getRadioOptionLabel,
       isVisible, writeValue: writeControlValue, focus: focusControl, blur: blurControl,
-      normalizeText: normalizeExpectedTextValue, runTextLifecycle, sameTextValue,
+      normalizeText: normalizeExpectedTextValue, prepareText: prepareTextValue, runTextLifecycle, sameTextValue,
       inspectText: inspectTextCommit, waitTextCommit: waitForTextCommit,
       replayFocusBlur, prefersSequential: prefersSequentialInput, dispatchTextInput,
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
@@ -4496,10 +5159,128 @@
     return ["custom-select", "cascader"].includes(observed?.controlKind) && ["options_not_rendered", "cascade_timeout"].includes(reason)
       ? { opened: "none" } : null;
   }
-  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
-    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
+
+  // #399 #405 写入被拒（值没有写上、被页面退回，#417 只读的选择框写不上）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
+  // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
+  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted", "readonly_picker"]);
+  // 框里剩下的也给没选上的日历记（#301）：控件层只在框里换成了别的日子时给 after=other。
+  const LEFTOVER_REASONS = new Set([...TEXT_REJECTED, "selection_not_committed"]);
+  const textLeftovers = new WeakMap();
+  // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
+  const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",
+    ...["dropdown", "popper", "popover", "popup", "suggest", "autocomplete", "picker-panel", "picker-dropdown", "picker-container",
+      "datepicker", "date-picker", "calendar", "laydate", "toast", "tooltip", "modal"].map((word) => `[class*='${word}' i]`),
+    ".el-message", ".ant-message"].join(", ");
+  let overlayWindowMs = 1000;
+  // 整页都写不上时不能每个框都多等 1 秒：只等前几个，诊断看这几个就够了。
+  const OVERLAY_WAITS = 3;
+  let overlayWatch = null;
+  const overlayWatches = new WeakMap();
+
+  function rememberLeftover(target, result) {
+    const control = target?.kind === "element" ? target.element : target;
+    if (!control || typeof control !== "object") return;
+    if (LEFTOVER_REASONS.has(result?.reason) && result.observed?.after) textLeftovers.set(control, { after: result.observed.after, session: fillSession });
+    else textLeftovers.delete(control);
+  }
+
+  const overlayWords = (element) => `${element.getAttribute?.("role") || ""} ${typeof element.className === "string" ? element.className : ""}`;
+  // 日历：带 picker、calendar、laydate，或 date / datetime 单独成词（x-datetime-content、DatePanel）。
+  // candidate、update、validate 里的 date 不算。
+  const isCalendarOverlay = (element) => {
+    const words = overlayWords(element);
+    return /picker|calendar|laydate/i.test(words) || /(?<![a-z])date(?:time)?(?![a-z])/i.test(words.replace(/([a-z])(?=[A-Z])/g, "$1 "));
+  };
+
+  // 日期面板、日历算别的弹层；下拉、联想建议算建议框。
+  function overlayKind(element) {
+    if (isCalendarOverlay(element)) return "other";
+    return /listbox|menu|tree|dropdown|suggest|autocomplete|select|option/i.test(overlayWords(element)) ? "list" : "other";
+  }
+
+  // #399 简道云的日期框失焦后把 1998-06 显示成 1998-06-01，日历却不收起：要点日子或在别处按下鼠标，表单才收下。
+  // 框里只是年月日相同（被改写过）、这次弹出的日历过了收起动画的时间还开着，就不算写上。
+  let calendarCloseMs = 500;
+  async function calendarKeptOpen(watch, element, value) {
+    const prepared = prepareTextValue(element, value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    const shown = String(element.value ?? "");
+    if (shown === normalizeExpectedTextValue(element, typed) || !sameDateText(shown, typed) || !watch.calendarOpen()) {
+      return false;
+    }
+    for (let waited = 0; waited < calendarCloseMs; waited += 50) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      if (!watch.calendarOpen()) return false;
+    }
+    return true;
+  }
+
+  // 从开始填这个框起看 1 秒：结果是 list / other / none；没看完时 kind() 是 null。
+  // 下一个字段开始填写时停下（stop(true)），免得把下一个字段的弹层算到这个框头上；这时还没看到弹层的，不说 none。
+  function watchOverlays(control) {
+    const visibleOverlays = () => {
+      try {
+        return Array.from(docOf(control).querySelectorAll(antdCss(control, OVERLAY_SELECTOR)))
+          .filter((node) => !node.contains(control) && !node.closest(`#${SIDEBAR_ID}`) && isVisible(node));
+      } catch {
+        return [];
+      }
+    };
+    const before = new Set(visibleOverlays());
+    let kind = null;
+    let done = false;
+    let pending = null;
+    let observer = null;
+    let timer = null;
+    let finish;
+    const settled = new Promise((resolve) => { finish = resolve; });
+    const look = () => {
+      const fresh = visibleOverlays().filter((node) => !before.has(node));
+      if (fresh.length) kind = fresh.some((node) => overlayKind(node) === "list") ? "list" : "other";
+      return Boolean(kind);
+    };
+    const stop = (early = false) => {
+      if (done) return;
+      done = true;
+      observer?.disconnect();
+      window.clearTimeout(timer);
+      window.clearTimeout(pending);
+      if (!look() && !early) kind = "none";
+      finish();
+    };
+    timer = window.setTimeout(stop, overlayWindowMs);
+    try {
+      observer = new MutationObserver(() => {
+        if (pending === null) pending = window.setTimeout(() => { pending = null; if (!done && look()) stop(); }, 30);
+      });
+      observer.observe(docOf(control).documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden"] });
+    } catch {
+      // 没有 MutationObserver 时只在结束时看一次。
+    }
+    const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
+    // 插件自己要收起网页打开的弹层之前（#301 #417 只读框写不上），先看一眼：防抖的那一次可能还没到，收起以后就看不到了。
+    const peek = () => { if (!done && look()) stop(); };
+    return { kind: () => kind, settled, stop, calendarOpen, peek };
+  }
+
+  // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
+  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite, { fill = false } = {}) {
     const control = target?.kind === 'element' ? target.element : target;
+    // 文本框才看弹层；不等文字提交时（测试）不看。
+    overlayWatch?.stop(true);
+    overlayWatch = fill && textCommitWaitMs > 0 && isHtmlElement(control) && !target?.pickerType
+      && !["custom-select", "cascader", "date", "date-picker"].includes(target?.controlKind) && isTextControl(control) ? watchOverlays(control) : null;
+    const watch = overlayWatch;
+    // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
+    if (watch) overlayWatches.set(control, watch);
+    else if (control && typeof control === 'object') overlayWatches.delete(control);
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill,
+      beforeDismiss: () => watch?.peek() });
+    if (result.ok && watch && isInputElement(control) && await calendarKeptOpen(watch, control, value)) {
+      result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
+    }
     if (control && typeof control === 'object') {
+      rememberLeftover(control, result);
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
       // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
@@ -4514,7 +5295,7 @@
 
   function highlightFilledField(fieldEntry, value) {
     getHighlightTargets(fieldEntry, value).forEach((target) => {
-      if (!(target instanceof HTMLElement)) {
+      if (!isHtmlElement(target)) {
         return;
       }
 
@@ -4543,6 +5324,8 @@
 
   function applyFieldHighlight(target) {
     clearFieldHighlightTimer(target);
+    // 同源框架里的字段（#400）：高亮样式要放进框架自己的文档。
+    if (docOf(target) !== document) injectFieldHighlightStyles(docOf(target));
     target.classList.remove(FIELD_HIGHLIGHT_CLASS);
     void target.offsetWidth;
     target.classList.add(FIELD_HIGHLIGHT_CLASS);
@@ -4580,34 +5363,41 @@
 
     const element = fieldEntry?.kind === "element" ? fieldEntry.element : fieldEntry;
 
-    if (!(element instanceof HTMLElement)) {
+    if (!isHtmlElement(element)) {
       return [];
     }
 
     if (fieldEntry?.pickerType) {
-      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime") || element];
+      return [element.closest(antdCss(element, ".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime")) || element];
     }
 
     return [element];
   }
 
+  // 按元素自己的视口算：同源框架里的元素（#400）的位置是相对框架的。
   function isInViewport(element) {
     const rect = element.getBoundingClientRect();
+    const view = viewOf(element);
+    const root = docOf(element).documentElement;
     return rect.top >= 0
       && rect.left >= 0
-      && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight)
-      && rect.right <= (window.innerWidth || document.documentElement.clientWidth);
+      && rect.bottom <= (view.innerHeight || root.clientHeight)
+      && rect.right <= (view.innerWidth || root.clientWidth);
   }
 
-  function injectFieldHighlightStyles() {
-    if (document.getElementById(FIELD_HIGHLIGHT_STYLE_ID)) {
-      return;
-    }
+  function injectFieldHighlightStyles(doc = document) {
+    try {
+      if (doc.getElementById(FIELD_HIGHLIGHT_STYLE_ID)) {
+        return;
+      }
 
-    const style = document.createElement("style");
-    style.id = FIELD_HIGHLIGHT_STYLE_ID;
-    style.textContent = FIELD_HIGHLIGHT_STYLE_TEXT;
-    (document.head || document.documentElement).appendChild(style);
+      const style = doc.createElement("style");
+      style.id = FIELD_HIGHLIGHT_STYLE_ID;
+      style.textContent = FIELD_HIGHLIGHT_STYLE_TEXT;
+      (doc.head || doc.documentElement).appendChild(style);
+    } catch {
+      // 框架正在跳转：这次不高亮，不影响填写。
+    }
   }
 
   function profileResumeFields() {
@@ -4710,7 +5500,7 @@
       if (entry.kind === "radio") {
         const checked = entry.elements.find(radioChecked);
         if (!checked) return ready("");
-        const label = cleanProfileText(checked instanceof HTMLInputElement ? checked.labels?.[0]?.textContent || checked.closest?.("label")?.textContent
+        const label = cleanProfileText(isInputElement(checked) ? checked.labels?.[0]?.textContent || checked.closest?.("label")?.textContent
           || checked.getAttribute?.("aria-label") : checked.textContent, false);
         return label ? ready(label) : unreadable;
       }
@@ -4721,7 +5511,7 @@
         if (selection?.texts?.length) return ready(cleanProfileText(selection.texts.join(selection.cascade ? "/" : "、"), false));
         return hasExistingValue(entry) ? unreadable : ready("");
       }
-      if (el instanceof HTMLSelectElement) {
+      if (isSelectElement(el)) {
         const options = Array.from(el.options || []);
         const chosen = el.multiple ? options.filter((option) => option.selected) : [options[el.selectedIndex]].filter(Boolean);
         const texts = chosen
@@ -4884,7 +5674,7 @@
   }
 
   function getRadioOptionLabel(radio) {
-    if (!(radio instanceof HTMLInputElement)) return String(radio.textContent || "").replace(/\s+/g, " ").trim();
+    if (!isInputElement(radio)) return String(radio.textContent || "").replace(/\s+/g, " ").trim();
     const directLabel = radio.labels?.[0]?.textContent?.trim();
 
     if (directLabel) {
@@ -4927,10 +5717,10 @@
 
   function isFillTarget(target) {
     return (
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement ||
-      (target instanceof HTMLElement && target.isContentEditable)
+      isInputElement(target) ||
+      isTextAreaElement(target) ||
+      isSelectElement(target) ||
+      (isHtmlElement(target) && target.isContentEditable)
     );
   }
 
@@ -5115,8 +5905,9 @@
     return "date";
   }
 
+  // 样式按元素所在的 window 取（#400 同源框架里的元素）。
   function isVisible(element) {
-    const styles = window.getComputedStyle(element);
+    const styles = viewOf(element).getComputedStyle(element);
     const rect = element.getBoundingClientRect();
 
     return styles.display !== "none"
@@ -7196,6 +7987,14 @@
       setTextCommitWaitMs(ms) {
         textCommitWaitMs = ms;
       },
+      setOverlayWindowMs(ms) {
+        overlayWindowMs = ms;
+      },
+      setCalendarCloseMs(ms) {
+        calendarCloseMs = ms;
+      },
+      prepareTextValue,
+      sameTextValue,
       textFillFailureReason(element) {
         const control = element?.kind === "element" ? element.element : element;
         return textFillFailures.get(control) || "";

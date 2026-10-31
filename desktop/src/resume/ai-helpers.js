@@ -27,6 +27,21 @@
     { type: "school", keywords: ["学校", "院校", "大学", "学院", "school", "university"] },
     { type: "degree", keywords: ["学历", "学位", "培养层次", "degree"] }
   ];
+  // 关键词先 normalize 好：本地匹配里每一对网页字段和简历字段都要查这张表。
+  const SEMANTIC_KEYWORDS = FIELD_SEMANTICS.map((item) => ({ type: item.type, keywords: item.keywords.map(normalizeText) }));
+  // 表里没有、但看得出是别的号码的简历字段名：不是手机也不是证件号，不按值去猜。
+  const OTHER_NUMBER_KEY = /微信|wechat|qq|学号|学生证|工号|准考证|考生号|报名号|学籍|证书|编号|卡号|账号|帐号|邮编|邮政编码/;
+  // 字段名认不出、只能按值猜手机和证件号时用（isResumeFieldMatch）。
+  const MOBILE_VALUE = /^(\+?86)?1[3-9]\d{9}$/;
+  const CN_ID_VALUE = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dxX]$/;
+
+  // #301 #418 证件类型的几种叫法：「我的信息」写全称（profile-fields.js），网站常写简称，旁边还有「香港居民身份证」这类，
+  // 按包含比会几项都沾边。只收确定是同一种证件的；「港澳通行证」也可能是内地居民往来港澳通行证，不收。
+  const ID_TYPE_NAMES = [
+    ["居民身份证", "身份证", "中国居民身份证", "中华人民共和国居民身份证", "大陆居民身份证", "二代身份证"],
+    ["港澳居民来往内地通行证", "回乡证"],
+    ["台湾居民来往大陆通行证", "台胞证"]
+  ].map((names) => new Set(names.map(normalizeText)));
 
   function detectCascadeGroups(fields, fieldMap) {
     const selectFields = fields.filter((f) => f.tagName === "select");
@@ -105,6 +120,9 @@
     normalizeText,
     inferFieldSemantic,
     buildRuleBasedMatches,
+    isSecretFormField,
+    isSafeResumeField,
+    localRuleMatches,
     selectResumeCandidates,
     findSelectOptionIndex,
     isPlaceholderOption,
@@ -112,6 +130,7 @@
     semanticizeParsedFields,
     normalizeParsedFields,
     normalizeDateValue,
+    rangeDateValue,
     detectCascadeGroups
   };
 
@@ -142,7 +161,17 @@
       field?.ariaLabel
     ].filter(Boolean).join(" "));
 
-    return FIELD_SEMANTICS.find((item) => item.keywords.some((keyword) => haystack.includes(normalizeText(keyword))))?.type || "";
+    return SEMANTIC_KEYWORDS.find((item) => item.keywords.some((keyword) => haystack.includes(keyword)))?.type || "";
+  }
+
+  // 简历字段名是哪一类：先查 FIELD_SEMANTICS，再认 DOB 这类缩写（整个名字才算，Adobe 不算）和别的号码。
+  // 认不出返回空串。只看字段名不看分组，和 inferFieldSemantic 一样：分组「联系方式」会把整组都认成电话。
+  function resumeKeyType(key) {
+    const type = inferFieldSemantic({ label: key });
+    if (type) return type;
+    const text = normalizeText(key);
+    if (/^(dob|born)$/.test(text)) return "birth_date";
+    return OTHER_NUMBER_KEY.test(text) ? "other" : "";
   }
 
   // Keep complete groups (including every repeated experience). Unknown or
@@ -183,6 +212,12 @@
     const strongTypes = new Set(["name", "email", "phone", "gender", "birth_date", "id_number", "hometown", "region"]);
     const matches = [];
     const usedResumeIndexes = new Set();
+    // 简历字段名的类别每项只算一次，用到时才算。
+    const keyTypes = new Map();
+    const keyTypeOf = (index) => {
+      if (!keyTypes.has(index)) keyTypes.set(index, resumeKeyType(resumeFields[index]?.key));
+      return keyTypes.get(index);
+    };
 
     formFields.forEach((field) => {
       const semantic = inferFieldSemantic(field);
@@ -197,7 +232,7 @@
           return false;
         }
 
-        if (!isSamePersonScope(resumeField, formScope) || !isResumeFieldMatch(semantic, resumeField, field)) {
+        if (!isSamePersonScope(resumeField, formScope) || !isResumeFieldMatch(semantic, resumeField, field, () => keyTypeOf(index))) {
           return false;
         }
 
@@ -215,6 +250,24 @@
     });
 
     return matches;
+  }
+
+  // 像密码的网页字段和简历资料不参与匹配，也不发给 AI。profile 是 profile-fields.js（ResumeProProfile）。
+  function isSecretFormField(field, profile) {
+    return String(field?.inputType ?? "").toLowerCase() === "password"
+      || profile.SECRET_LABEL.test([field?.label, field?.name, field?.key].filter(Boolean).join(" "));
+  }
+
+  function isSafeResumeField(field, profile) {
+    return !profile.SECRET_LABEL.test(String(field?.key ?? ""))
+      && !profile.SECRET_VALUE.test(String(field?.value ?? ""));
+  }
+
+  // 本地规则的匹配结果（#402）：worker 的 ruleMatches 和网页先填的字段用同一份口径。
+  function localRuleMatches(formFields, resumeFields, profile) {
+    const forms = formFields.filter((field) => !isSecretFormField(field, profile));
+    const resume = resumeFields.filter((field) => isSafeResumeField(field, profile));
+    return filterValidMatches(forms, buildRuleBasedMatches(forms, resume));
   }
 
   function filterValidMatches(formFields, matches) {
@@ -305,6 +358,11 @@
     index = findUsable((option) => normalizeText(optionText(option)) === normalizedTarget
       || normalizeText(optionValue(option)) === normalizedTarget);
     if (index >= 0) return index;
+
+    // 证件类型（见 ID_TYPE_NAMES）：选项里正好一项是同一种证件的另一种叫法才用它，几项都是就照下面的规则。
+    const idNames = ID_TYPE_NAMES.find((names) => names.has(normalizedTarget));
+    const sameId = idNames ? usable.filter(({ option }) => idNames.has(normalizeText(optionText(option))) || idNames.has(normalizeText(optionValue(option)))) : [];
+    if (sameId.length === 1) return sameId[0].index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
     const negatedBefore = (text, at) => /(非|不|无|未)$/.test(text.slice(0, at));
@@ -468,23 +526,38 @@
     return /^(请选择|请输入|please\s*(select|choose)|select\b|choose\b|--|—)|^选择$/i.test(text);
   }
 
-  function isResumeFieldMatch(semantic, resumeField, formField) {
+  function isResumeFieldMatch(semantic, resumeField, formField, keyType = () => resumeKeyType(resumeField?.key)) {
     const keyText = normalizeText([resumeField?.group, resumeField?.key].filter(Boolean).join(" "));
     const value = String(resumeField?.value ?? "").trim();
+    const ownKey = normalizeText(resumeField?.key);
+    // 字段名自己带着「手机」「证件」这类词就算，哪怕它归到了别的类（「证件编号」算别的号码，「手机/邮箱」算邮箱）。
+    // 不带的，字段名认得出是哪一类（微信、准考证号、姓名）就只按名字算，认不出的（自定义的「号码1」）才看分组名和值：
+    // 手机号也是 8 到 18 位数字，纯数字的身份证号也像电话，按值算会让排在前面的那项填进另一个框；
+    // 分组名同理，「证件信息」下的准考证号、「手机与微信」下的微信不是证件号码和手机。
+    const byKeyName = (words, valueFits) => {
+      if (words.some((word) => ownKey.includes(word))) return true;
+      const type = keyType();
+      return type ? type === semantic : words.some((word) => keyText.includes(word)) || valueFits();
+    };
+    // 按值猜时，明确是大陆手机号的不当证件号，明确是 18 位身份证号的不当电话：「号码1」「号码2」谁排前面都不互相顶替。
+    const compact = value.replace(/[\s-]/g, "");
 
     switch (semantic) {
       case "name":
-        return keyText.includes("姓名") && !keyText.includes("拼音");
+        // 分组名只给认不出的字段名用（分组「姓名」下的「中文」）；schoolName 这类认作别的类，不看分组。
+        return (ownKey.includes("姓名") || (!keyType() && keyText.includes("姓名"))) && !keyText.includes("拼音");
       case "email":
         return /@/.test(value) || keyText.includes("邮箱") || keyText.includes("email");
       case "phone":
-        return /^(\+?\d[\d\s-]{7,})$/.test(value) || keyText.includes("手机") || keyText.includes("电话");
+        return byKeyName(["手机", "电话"], () => /^(\+?\d[\d\s-]{7,})$/.test(value) && !CN_ID_VALUE.test(compact));
       case "gender":
-        return /(男|女|male|female)/i.test(value) || keyText.includes("性别");
+        // 按值猜只收整个值就是性别的，带「女」字的经历描述不算。
+        return byKeyName(["性别"], () => /^(男|女|男性|女性|male|female)$/i.test(value));
       case "birth_date":
-        return /出生|生日|birth/.test(keyText) || /(\d{4}[-/.年]\d{1,2}([-/.\月]\d{1,2}日?)?)/.test(value);
+        // 日期看不出是谁的：毕业时间、实习起止时间也是这个样子，出生日期只按名字认。
+        return /出生|生日|birth/.test(ownKey) || keyType() === "birth_date";
       case "id_number":
-        return keyText.includes("身份证") || keyText.includes("证件") || /^[0-9xX]{8,18}$/.test(value.replace(/\s/g, ""));
+        return byKeyName(["身份证", "证件"], () => /^[0-9xX]{8,18}$/.test(value.replace(/\s/g, "")) && !MOBILE_VALUE.test(compact));
       case "hometown":
         return isSameRegionTopic(resumeField, formField);
       case "region":
@@ -647,6 +720,21 @@
     }
   }
 
+  // 日期题收到一段起止（「2019.09-2023.06」，#301 北森）：题目或占位提示写明开始还是结束，就取前一个或后一个日期。
+  // 两样都写了（起止时间）、都没写，或不是正好两个日期的，原样交回，由日期控件报日期不对。
+  const SPAN_DATE = /(?:19|20)\d{2}(?:\s*年\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?|\s*[\/\-.]\s*\d{1,2}(?!\d)(?:\s*[\/\-.]\s*\d{1,2}(?!\d))?|\s*年)?/g;
+  // 「起」「止」单独成词才算（「在校时间（起）」「在校时间：止」）：「发起」「起薪」「禁止」里的不算。
+  const SPAN_START = /开始|起始|入学|入职|(?:^|[\s(（【\[:：])起(?=$|[\s)）】\]:：])|\b(?:start|from|begin)/i;
+  const SPAN_END = /结束|截止|终止|毕业|离职|(?:^|[\s(（【\[:：])止(?=$|[\s)）】\]:：])|\b(?:end|until)\b/i;
+  function rangeDateValue(rawValue, hint) {
+    const raw = String(rawValue ?? "").trim();
+    const dates = raw.match(SPAN_DATE) || [];
+    if (dates.length !== 2 || raw.replace(SPAN_DATE, "").replace(/[\s\-~～—–至到]/g, "")) return raw;
+    const text = String(hint ?? "");
+    const start = SPAN_START.test(text), end = SPAN_END.test(text);
+    return start === end ? raw : dates[start ? 0 : 1].trim();
+  }
+
   function parseDateParts(raw) {
     if (/(19|20)\d{2}.+(19|20)\d{2}/.test(raw)) return null;
 
@@ -661,7 +749,8 @@
       };
     }
 
-    const separatorMatch = raw.match(/^(\d{4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2})(?!\d))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
+    // 分隔符两边可以带空格（「2019 - 09」「2019. 09」，#301 北森）。
+    const separatorMatch = raw.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})(?:\s*[\/\-.]\s*(\d{1,2})(?!\d))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (separatorMatch) {
       return {
         year: separatorMatch[1],

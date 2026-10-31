@@ -162,6 +162,27 @@ test('a desktop reread does not re-enable AI while the page is busy', async () =
   assert.equal(ui.get('fill-button').disabled, true);
 });
 
+// #402：等 AI 久了，网页给的提示显示在填写进度卡里；没在填写或没有提示时收起。
+test('the fill progress card shows the page\'s wait hint while filling', async () => {
+  const ui = await harness();
+  const hint = '已经先填了 3 项，剩下的还在等 AI。可以接着等，也可以点取消，已填的会保留。';
+  ui.setPageResponse({ ready: true, busy: true, phase: '已先填 3 项，AI 匹配中... 31s', canCancel: true, waitHint: hint });
+  ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('fill-progress').hidden, false);
+  assert.equal(ui.get('fill-progress-phase').textContent, '已先填 3 项，AI 匹配中... 31s');
+  assert.equal(ui.get('fill-progress-hint').hidden, false);
+  assert.equal(ui.get('fill-progress-hint').textContent, hint);
+  ui.setPageResponse({ ready: true, busy: true, phase: 'AI 匹配中... 5s', waitHint: '' });
+  ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('fill-progress-hint').hidden, true);
+  ui.setPageResponse({ ready: true, busy: false, waitHint: hint });
+  ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('fill-progress-hint').hidden, true, 'only while filling');
+});
+
 test('template switch writes desktop then rereads, and field action carries snapshot value', async () => {
   const ui = await harness();
   ui.get('template-select').value = TEMPLATE;

@@ -51,7 +51,7 @@
   // The worker writes the [来源] section (version, OS, install type, host) itself; a page cannot supply it.
   // [岗位] (#301) goes only into manual feedback, which the user previews; automatic reports drop it.
   const SECTIONS = new Set(["页面", "填写", "字段漏斗", "页面结构", "错误", "匹配", "性能", "未填字段", "岗位"]);
-  const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_blocked", "match_failed", "fill_rejected",
+  const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_same_origin", "iframe_cross_origin", "match_failed", "fill_rejected",
     "timeout", "service_error", "unknown", "none"];
   const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
     "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
@@ -67,7 +67,7 @@
   // `scan_error` (#408): controls whose title or section could not be read, skipped one by one.
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
     "site_search", "outside_form", "no_label", "scan_error", "out_of_scope", "secret",
-    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
+    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "changed_while_waiting", "not_written", "unconfirmed", "unsynced"];
   // Where each scanned field's title came from, and why a field was not offered for 我的信息 (#228).
   const LABEL_SOURCES = ["explicit", "item", "table", "sibling", "placeholder"];
   const OFFER_SKIPS = ["ambiguous", "entry"];
@@ -97,7 +97,13 @@
     "in_flight", "internal", "other"];
   // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
   const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "format_mismatch", "readonly_picker", "operation_failed", "cancelled"];
+  // A text the page did not keep (#399 #405): what the box held after it lost focus (empty, what it held before
+  // the fill, or something else; never the text itself), and whether a suggestion list or another popup came
+  // up within a second of writing. The box's inputmode is part of its structure.
+  const AFTER = ["empty", "previous", "other"];
+  const OVERLAYS = ["list", "other", "none"];
+  const INPUT_MODES = ["numeric", "decimal", "tel", "email", "url", "search", "text", "none"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
@@ -127,6 +133,7 @@
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
     + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui|jiandaoyun|yui|ui5)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|inputmode=(?:${INPUT_MODES.join("|")})|after=(?:${AFTER.join("|")})|overlay=(?:${OVERLAYS.join("|")})`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
   // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
@@ -171,8 +178,11 @@
   function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, catchUpCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
     if (!scanned) return { category: "unknown", stage: "scan" };
     if (fieldCount === 0) {
-      // A form may sit in a frame even when nothing else on the page looks like one.
-      if (frames?.crossOrigin > 0 || frames?.frameInputs > 0) return { category: "iframe_blocked", stage: "scan" };
+      // A form may sit in a frame even when nothing else on the page looks like one. Same-origin frames are
+      // scanned (#400), so inputs found there yet no field mean the scan missed them; a cross-origin frame
+      // stays out of reach. Inputs in a same-origin frame are the more specific clue.
+      if (frames?.frameInputs > 0) return { category: "iframe_same_origin", stage: "scan" };
+      if (frames?.crossOrigin > 0) return { category: "iframe_cross_origin", stage: "scan" };
       // A page that is not an application form has nothing to fix. When the probe is
       // missing we cannot tell, so the page is treated as a form that yielded no fields.
       return { category: pageType === "unknown" ? "page_not_supported" : "no_fields_found", stage: "scan" };
@@ -229,6 +239,8 @@
       outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), scan_error: n(s?.scanError), out_of_scope: n(s?.outOfScope),
       secret, no_resume_mapping: noMapping,
       ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
+      // Matches left alone because the user or the page changed the field while the AI worked (#402).
+      changed_while_waiting: n(input.keptCount),
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
     if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
@@ -350,11 +362,14 @@
         if (c.readOnly) tokens.push("readonly");
         if (c.picker) tokens.push(`picker=${c.picker}`);
         if (c.library) tokens.push(`lib=${c.library}`);
+        if (INPUT_MODES.includes(c.inputMode)) tokens.push(`inputmode=${c.inputMode}`);
         // The select's popup (#301): never opened, or opened, and whether its list had any option. Never how
         // many: a lower select's list is the one the page loaded for the upper choice made from the resume.
         const o = item?.observed || {};
         if (OPENED.includes(o.opened)) tokens.push(`opened=${o.opened}`);
         if (LISTS.includes(o.opened) && typeof o.hasOptions === "boolean") tokens.push(`options=${o.hasOptions ? "1+" : "0"}`);
+        if (AFTER.includes(o.after)) tokens.push(`after=${o.after}`);
+        if (OVERLAYS.includes(o.overlay)) tokens.push(`overlay=${o.overlay}`);
         if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
         lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
       }
@@ -374,7 +389,7 @@
         continue;
       }
       // Every value has its own closed pattern; the length cap only bounds the regex work.
-      // The longest reachable value is drop_reasons with every reason at six digits (348 chars).
+      // The longest reachable value is drop_reasons with every reason at six digits (377 chars).
       const entry = /^([a-z_]{1,32}): (.{1,400})$/.exec(line);
       if (entry) {
         const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2])

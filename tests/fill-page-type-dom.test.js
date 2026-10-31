@@ -151,7 +151,7 @@ const CASES = [
   // 框架
   { name: "E1 sized cross-origin iframe", href: "https://hr.example.test/job/1", title: "招聘",
     body: `<iframe src="https://ats.other.test/form" data-xo="1"></iframe>`, setup: crossOrigin,
-    expect: { fields: 0, pageType: "unknown/none", category: "iframe_blocked", report: "fill_failed", hint: HINT.notFormFrame, offer: "none", waits: false } },
+    expect: { fields: 0, pageType: "unknown/none", category: "iframe_cross_origin", report: "fill_failed", hint: HINT.notFormFrame, offer: "none", waits: false } },
   { name: "E2 cross-origin iframe not sized yet", href: "https://hr.example.test/job/1", title: "招聘",
     body: `<iframe src="https://ats.other.test/form" data-xo="1" data-h="0"></iframe>`, setup: crossOrigin,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none", waits: false } },

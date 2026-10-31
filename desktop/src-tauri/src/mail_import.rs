@@ -454,6 +454,10 @@ mod tests {
             crate::plugin_bridge::apply(&changed, &store).unwrap_err(),
             ErrorCode::Conflict
         );
+        let original = store.get_evidence(id).unwrap().unwrap();
+        store.purge_recycled_evidence(id, &original.blob.meta.sha256).unwrap();
+        assert_eq!(crate::plugin_bridge::apply(&request, &store).unwrap_err(), ErrorCode::PreviouslyPurged);
+        assert!(store.list_evidence(None).unwrap().is_empty());
     }
     #[test]
     fn partial_upload_creates_no_evidence_and_restored_archive_rejects_remaining_chunks() {

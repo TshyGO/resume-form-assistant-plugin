@@ -161,6 +161,7 @@ button:disabled { cursor: not-allowed; }
 .fill-progress p { margin: 0; }
 .fill-progress__title { font-size: 13px; font-weight: 650; }
 .fill-progress__phase { margin-top: 2px !important; font-size: 12px; }
+.fill-progress__hint { margin-top: 6px !important; font-size: 12px; line-height: 1.5; }
 .fill-progress__bar, .progress-line { position: relative; display: block; height: 4px; margin-top: 9px; overflow: hidden; border-radius: 2px; background: #d3e6e0; }
 .fill-progress__bar::after, .progress-line::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 38%; border-radius: 2px; background: var(--accent); animation: indeterminate 1.4s ease-in-out infinite; }
 @keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(270%); } }

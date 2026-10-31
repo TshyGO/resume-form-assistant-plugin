@@ -19,6 +19,8 @@ function setup() {
     if (name === "list_applications_cmd") return { items: [] };
     if (name === "mailbox_view") return { accounts: [], candidates: [], pendingCount: 0 };
     if (name === "set_evidence_recycled_cmd") { const target = rows.find(r => r.id === args?.evidenceId)!; target.recycled = Boolean(args?.recycled); return {...target}; }
+    if (name === "preview_evidence_purge_cmd") return { target: { evidenceId: args?.evidenceId, archiveId: "archive", restoreEpoch: "epoch", blobSha256: "hash" }, title: row.subject, originalShared: false };
+    if (name === "purge_recycled_evidence_cmd") { rows.splice(rows.findIndex(r => r.id === (args?.target as {evidenceId:string}).evidenceId), 1); return { originalShared: false, cleanupPending: false }; }
     if (name === "import_evidence_cmd") { const fresh = fixture("imported"); rows.push(fresh); return { imported:[fresh],duplicates:[],failed:[] }; }
     throw new Error(`unexpected ${name}`);
   });
@@ -60,7 +62,11 @@ test("failed recycle preserves the notification and provides a retryable error",
 test("late active-list responses cannot overwrite the recycle list or its selected preview", async () => {
   const h = setup(); await h.inbox.refresh(); const old = {...h.row};
   let release!: (data: unknown) => void;
-  h.handlers.list_inbox_cmd = () => new Promise(resolve => {release = resolve;});
+  let first = true;
+  h.handlers.list_inbox_cmd = () => {
+    if (first) { first = false; return new Promise(resolve => {release = resolve;}); }
+    return h.rows.filter(r => !r.recycled && !r.applicationId).map(r => ({...r}));
+  };
   const oldRefresh = h.inbox.refresh(); h.row.recycled = true;
   fireEvent.click(el("mailbox-tab-recycled"));
   const item = await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知/}); fireEvent.click(item);
@@ -68,6 +74,7 @@ test("late active-list responses cannot overwrite the recycle list or its select
   release([old]); await oldRefresh;
   expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
   expect(el("mailbox-tab-recycled").getAttribute("aria-selected")).toBe("true");
+  expect(el("inbox-count").textContent).toBe("0");
 });
 test("importing from the recycle view returns to the active list and reveals the imported notification", async () => {
   const h = setup(); h.row.recycled = true; await h.inbox.refresh();
@@ -98,4 +105,207 @@ test("a failed recycle-list read reports failure instead of claiming the bin is 
   await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知/});
   expect(h.preview.queryByText("暂时无法读取通知")).toBeNull();
   expect(h.invoke.mock.calls.some(([name]) => name.startsWith("mailbox_check"))).toBe(false);
+});
+
+async function openRecycled(h: ReturnType<typeof setup>) {
+  h.row.recycled = true;
+  fireEvent.click(el("mailbox-tab-recycled"));
+  fireEvent.click(await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知 one/}));
+  return h.preview.findByRole("button", { name: "永久删除" });
+}
+
+test("external webmail saves refresh the stored badge while preserving the recycled tab and selected body", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  await h.preview.findByRole("button", {name:"恢复通知"});
+  h.rows.push(fixture("external-save"));
+  await h.inbox.refresh();
+  expect(el("inbox-count").textContent).toBe("1");
+  expect(el("mailbox-tab-recycled").getAttribute("aria-selected")).toBe("true");
+  expect(h.preview.getByText("原正文始终保留")).toBeTruthy();
+  expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
+  expect(within(el("inbox-recycled-list")).queryByRole("button", {name:/external-save/})).toBeNull();
+  fireEvent.click(el("mailbox-tab-stored"));
+  await within(el("inbox-list")).findByRole("button", {name:/external-save/});
+});
+
+test("badge reads do not block the recycle list, and a failed count is unknown rather than stale zero", async () => {
+  const h = setup(); h.row.recycled = true;
+  let reject!: (error: unknown) => void;
+  h.handlers.list_inbox_cmd = () => new Promise((_, fail) => { reject = fail; });
+  fireEvent.click(el("mailbox-tab-recycled"));
+  fireEvent.click(await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知 one/}));
+  await h.preview.findByRole("button", {name:"恢复通知"});
+  reject(new Error("count unavailable"));
+  await waitFor(() => expect(el("inbox-count").textContent).toBe(""));
+  expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
+});
+
+test("external refresh updates the badge without replacing a pending-mail preview", async () => {
+  const h = setup(); h.row.recycled = true;
+  await h.inbox.showRecycled();
+  h.inbox.showPending(null);
+  h.rows.push(fixture("external-save"));
+  await h.inbox.refresh();
+  expect(el("inbox-count").textContent).toBe("1");
+  expect(h.preview.getByRole("heading", {name:"没有待确认邮件"})).toBeTruthy();
+});
+
+test("unchanged foreground reads preserve the focused list row and organizer draft", async () => {
+  const h = setup(); await h.inbox.refresh();
+  fireEvent.click(within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/}));
+  fireEvent.click(await h.preview.findByRole("button", {name:"整理与关联"}));
+  const input = el("inbox-reply-class") as HTMLSelectElement;
+  input.value = "interview_invite";
+  const row = within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/});
+  row.focus();
+  await h.inbox.refresh();
+  expect(within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/})).toBe(row);
+  expect(document.activeElement).toBe(row);
+  expect(el("inbox-reply-class")).toBe(input);
+  expect(input.value).toBe("interview_invite");
+});
+
+test.each([
+  ["stored", true, true], ["stored", true, false],
+  ["stored", false, true], ["stored", false, false],
+  ["recycled", true, true], ["recycled", true, false],
+  ["recycled", false, true], ["recycled", false, false],
+] as const)("latest refresh settles %s loading (has rows=%s, old first=%s)", async (mode, hasRows, oldFirst) => {
+  const h = setup();
+  if (mode === "stored") await h.inbox.showRecycled();
+  h.row.recycled = mode === "recycled";
+  if (!hasRows) h.rows.splice(0);
+  const rows = h.rows.map(row => ({...row}));
+  const command = mode === "stored" ? "list_inbox_cmd" : "list_recycled_evidence_cmd";
+  const releases: Array<(value: unknown) => void> = [];
+  h.handlers[command] = () => new Promise(resolve => {releases.push(resolve);});
+  const opening = mode === "stored" ? h.inbox.showStored() : h.inbox.showRecycled();
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeTruthy();
+  const foreground = h.inbox.refresh();
+  expect(releases).toHaveLength(2);
+  if (oldFirst) {
+    releases[0]([]); await opening;
+    releases[1](rows); await foreground;
+  } else {
+    releases[1](rows); await foreground;
+    releases[0]([]); await opening;
+  }
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeNull();
+  expect(el("inbox-preview").textContent).not.toContain("正在读取");
+  expect(el("inbox-preview").textContent).toContain(hasRows ? "选择一条通知" : mode === "stored" ? "没有待整理的招聘通知" : "回收站为空");
+  if (hasRows) expect(el(mode === "stored" ? "inbox-list" : "inbox-recycled-list").querySelector('[data-evidence="one"]')).toBeTruthy();
+});
+
+test("an older successful read cannot replace the latest failed-read recovery prompt", async () => {
+  const h = setup(); h.row.recycled = true;
+  let release!: (value: unknown) => void;
+  h.handlers.list_recycled_evidence_cmd = () => new Promise(resolve => {release = resolve;});
+  const opening = h.inbox.showRecycled();
+  h.handlers.list_recycled_evidence_cmd = () => {throw {message:"读不到档案"};};
+  expect(await h.inbox.refresh()).toBe(false);
+  release([{...h.row}]); await opening;
+  expect(el("inbox-preview").textContent).toContain("暂时无法读取通知");
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeNull();
+});
+
+test("permanent deletion is only available in recycle bin and cancellation keeps the notification", async () => {
+  const h = setup(); await h.inbox.refresh();
+  fireEvent.click(within(el("inbox-list")).getByRole("button", {name:/功能验证通知/}));
+  await h.preview.findByRole("button", {name:"移到回收站"});
+  expect(h.preview.queryByRole("button", {name:"永久删除"})).toBeNull();
+  fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  expect(dialog.textContent).toContain("删除后无法在回收站恢复");
+  expect(dialog.textContent).toContain("申请、已记录的进度和待办保留");
+  const cancel = within(dialog).getByRole("button", {name:"取消"});
+  expect(document.activeElement).toBe(cancel);
+  expect(h.invoke.mock.calls.some(([name]) => name === "purge_recycled_evidence_cmd")).toBe(false);
+  fireEvent.click(cancel);
+  await waitFor(() => expect(document.querySelector(".settings-dialog")).toBeNull());
+  expect(h.rows).toHaveLength(1); expect(h.row.recycled).toBe(true);
+});
+
+test("confirmed deletion binds the displayed target, blocks duplicate clicks, and clears the deleted preview", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  let finish!: () => void;
+  h.handlers.purge_recycled_evidence_cmd = args => new Promise(resolve => {
+    expect(args?.target).toEqual({ evidenceId:"one", archiveId:"archive", restoreEpoch:"epoch", blobSha256:"hash" });
+    finish = () => { h.rows.splice(0); resolve({ originalShared: false, cleanupPending: false }); };
+  });
+  const confirm = within(dialog).getByRole("button", {name:"永久删除"});
+  fireEvent.click(confirm); fireEvent.click(confirm);
+  expect(confirm.hasAttribute("disabled")).toBe(true);
+  fireEvent.keyDown(dialog, {key:"Escape"}); expect(dialog.isConnected).toBe(true);
+  expect(h.invoke.mock.calls.filter(([name]) => name === "purge_recycled_evidence_cmd")).toHaveLength(1);
+  finish();
+  await waitFor(() => expect(h.preview.queryByText("原正文始终保留")).toBeNull());
+  await waitFor(() => expect(el("inbox-status").textContent).toContain("通知已永久删除"));
+  expect(within(el("inbox-recycled-list")).queryByRole("button", {name:/功能验证通知/})).toBeNull();
+});
+
+test("failed deletion leaves the modal and record in place and allows a confirmed retry", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  h.handlers.purge_recycled_evidence_cmd = () => { throw {message:"磁盘暂时不可写"}; };
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("磁盘暂时不可写"));
+  expect(h.rows).toHaveLength(1);
+  delete h.handlers.purge_recycled_evidence_cmd;
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(document.querySelector(".settings-dialog")).toBeNull());
+  expect(h.rows).toHaveLength(0);
+});
+
+test("a successful purge clears the old body even if the subsequent list reload fails", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  h.handlers.list_recycled_evidence_cmd = () => { throw {message:"暂时读不到列表"}; };
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(el("inbox-status").textContent).toContain("列表暂时无法刷新"));
+  expect(el("inbox-status").textContent).toContain("通知已永久删除");
+  expect(h.preview.queryByText("原正文始终保留")).toBeNull();
+  expect(h.preview.queryByRole("button", {name:"恢复通知"})).toBeNull();
+  expect(h.rows).toHaveLength(0);
+});
+
+test("a refresh superseded after deletion is not reported as a list read failure", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  let release!: (value: unknown) => void;
+  h.handlers.list_recycled_evidence_cmd = () => new Promise(resolve => { release = resolve; });
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  delete h.handlers.list_recycled_evidence_cmd;
+  expect(await h.inbox.refresh()).toBe(true);
+  release([]);
+  await waitFor(() => expect(h.preview.getByText("回收站为空")).toBeTruthy());
+  // Let the older purge refresh resume after the newer successful read.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(el("inbox-status").textContent).toContain("通知已永久删除");
+  expect(el("inbox-status").textContent).not.toContain("无法刷新");
+});
+
+test.each([true, false])("shared originals and incomplete file cleanup are accurately reported (%s)", async shared => {
+  const h = setup();
+  h.handlers.preview_evidence_purge_cmd = () => ({target:{ evidenceId:"one" },title:"Synthetic",originalShared:shared});
+  h.handlers.purge_recycled_evidence_cmd = () => { h.rows.splice(0); return {originalShared:shared,cleanupPending:!shared}; };
+  fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  if (shared) expect(dialog.textContent).toContain("只有删除时已无人引用的原件才会清理");
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(el("inbox-status").textContent).toContain(shared ? "共用原件已保留" : "原件文件尚未清理完成"));
+});
+
+test("a delayed purge preview cannot open a confirmation after selecting another notification", async () => {
+  const h = setup(); h.rows.push({...fixture("two"),recycled:true});
+  let finish!: (data: unknown) => void;
+  h.handlers.preview_evidence_purge_cmd = () => new Promise(resolve => { finish = resolve; });
+  fireEvent.click(await openRecycled(h));
+  fireEvent.click(within(el("inbox-recycled-list")).getByRole("button", {name:/功能验证通知 two/}));
+  await h.preview.findByRole("heading", {name:"功能验证通知 two"});
+  finish({target:{evidenceId:"one"},title:"Old",originalShared:false});
+  await waitFor(() => expect(h.preview.getByRole("button", {name:"永久删除"}).hasAttribute("disabled")).toBe(false));
+  expect(document.querySelector(".settings-dialog")).toBeNull();
+  expect(h.invoke.mock.calls.some(([name]) => name === "purge_recycled_evidence_cmd")).toBe(false);
 });

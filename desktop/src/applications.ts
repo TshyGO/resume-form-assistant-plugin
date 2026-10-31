@@ -52,6 +52,7 @@ const EVENT_LABEL: Record<string, string> = {
   fill_cancelled: "填写取消",
   evidence_imported: "存入一封招聘通知",
   "custom.evidence_recycled": "通知移到回收站",
+  "custom.evidence_purged": "永久删除通知",
   "custom.evidence_restored": "恢复通知",
   evidence_associated: "已关联一封招聘通知",
   association_changed: "调整了通知关联",
