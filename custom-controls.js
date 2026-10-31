@@ -233,28 +233,31 @@
   const FLOATING = '.el-popper, .el-picker-panel, .el-autocomplete-suggestion, .ant-calendar-picker-container, .ant-cascader-menus, .ant-picker-dropdown';
   const FLOATING_WORDS = ['popper', 'popover', 'popup', 'dropdown', 'picker-panel', 'suggest', 'calendar', 'datepicker', 'date-picker']
     .map(word => `[class*="${word}" i]`).join(', ');
-  // 每块浮层在记下时有哪些直接子节点（见 staleLayer）。
-  const layerKids = new WeakMap();
+  // 只按类名里的词认出的浮层，记下时里面有哪些元素（见 staleLayer）。一块里超过这么多的不记，按装着就算旧的。
+  const layerNodes = new WeakMap();
+  const LAYER_NODES_MAX = 5000;
   function shownLayers(doc, visible) {
     const View = doc.defaultView;
     const floating = node => ['absolute', 'fixed'].includes(View?.getComputedStyle(node).position);
-    const layers = new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(FLOATING)).filter(visible),
-      ...Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => trim(node.textContent) && visible(node) && floating(node))]);
-    for (const layer of layers) layerKids.set(layer, new Set(layer.children));
-    return layers;
+    const shells = new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(FLOATING)).filter(visible)]);
+    const worded = Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => !shells.has(node) && trim(node.textContent) && visible(node) && floating(node));
+    // 组件库的弹层外壳一块只装一个弹层，里面重画了也还是旧的；只按类名里的词认出的可能是网页放弹层的常驻外壳，记下里面原有的元素。
+    for (const layer of worded) {
+      const nodes = layer.querySelectorAll('*');
+      if (nodes.length <= LAYER_NODES_MAX) layerNodes.set(layer, new WeakSet(nodes));
+    }
+    return new Set([...shells, ...worded]);
   }
   // 被点开前就开着的浮层装着、或装着它的一块不是这次点开的。装着这个控件的不算：页面上常驻的大块 listbox、tree。
-  // 旧浮层装着它时，只有它所在的那一支点开前就在这块里，才算旧的：网页放弹层的常驻外壳里装着上一题留下的下拉，
-  // 这次新放进同一个外壳的日历、下拉不算。
+  // 旧浮层装着它时：组件库的外壳算旧的；只按类名里的词认出的，只有它自己点开前就在这块里才算旧的——
+  // 网页放弹层的常驻外壳（或外壳里常驻的包装节点）装着上一题留下的下拉，这次新放进去的日历、下拉不算。
   function staleLayer(node, info) {
     return Array.from(info.before || []).some(old => {
       if (!old.isConnected || old.contains(info.root)) return false;
       if (node === old || node.contains(old)) return true;
       if (!old.contains(node)) return false;
-      let branch = node;
-      while (branch.parentElement && branch.parentElement !== old) branch = branch.parentElement;
-      const kids = layerKids.get(old);
-      return !kids || kids.has(branch);
+      const known = layerNodes.get(old);
+      return !known || known.has(node);
     });
   }
   function ownedPopup(info, visible) {
@@ -689,14 +692,20 @@
       h.write(input, [want.y, pad2(want.m), pad2(want.d)].join(sep), ctx); h.input(input);
       await new Promise(resolve => setTimeout(resolve, 0));
       const caughtUp = seen => {
-        if (!seen) return true;
+        // 一时取不到日历（正在重画）不算跟上，接着等。
+        if (!seen) return false;
         if ((seen.headYear && seen.headYear !== want.y) || (seen.headMonth && seen.headMonth !== want.m)) return false;
         // 标题认不出年月时，选中的日子没变不算跟上（原来选着的可能正好是同一天），要等日历上的字也变了。
         if (seen.picked.length && seen.headYear && seen.headMonth) return seen.picked.includes(want.d);
         return face(seen) !== untyped && (!seen.picked.length || seen.picked.includes(want.d));
       };
-      // 只有 antd 3 / ant-design-vue 1.x 的日历（.ant-calendar-input）自己接打的字；北森、Element 这类要回车才收，不等，过一拍就回车。
-      const followsTyping = input.classList.contains('ant-calendar-input');
+      // 只有 antd 3 / ant-design-vue 1.x 的日历（.ant-calendar-input，换了前缀的 .X-calendar-input 也算，要在 .X-calendar 里）
+      // 自己接打的字；北森、Element 这类要回车才收，不等，过一拍就回车。
+      const followsTyping = Array.from(input.classList).some(token => {
+        const prefix = /^([A-Za-z][\w-]*)-calendar-input$/.exec(token)?.[1];
+        // 前缀只收字母开头的字母、数字、横线、下划线，拼进选择器不会变成别的写法。
+        return Boolean(prefix && input.closest(`.${prefix}-calendar`));
+      });
       const caught = followsTyping ? await h.waitUntil(ctx, doc.documentElement, () => current() && calendarView(layer, h), caughtUp, TYPED_DATE_MS) : {};
       if (caught.reason && caught.reason !== 'verification_timeout') return { reason: caught.reason };
       const stopped = h.stop(ctx, true); if (stopped) return { reason: stopped };

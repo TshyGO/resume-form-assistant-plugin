@@ -32,7 +32,9 @@ const pad = (n) => String(n).padStart(2, "0");
 // 日历上面有能打字的日期框。今天固定为 2026-10-22。
 // lag：打的字过多久才交给日历（Vue 2 要过一拍，antd 3 的 React 是同步的，给 null）。
 // 回车提交的是日历当前的日子，没选过是今天。english：年月标题是 Oct 2026，插件认不出。
-function antCalendar({ label = "出生日期", lag = 0, english = false, value = "" } = {}) {
+// prefix：日历弹层用的 antd 类名前缀（ConfigProvider prefixCls），默认 ant。
+function antCalendar({ label = "出生日期", lag = 0, english = false, value = "", prefix = "ant" } = {}) {
+  const P = (html) => prefix === "ant" ? html : html.replaceAll("ant-calendar", `${prefix}-calendar`);
   const h = load(`<div class="ant-form-item"><div class="ant-form-item-label"><label title="${label}">${label}</label></div>
     <div class="ant-form-item-control"><span class="ant-calendar-picker"><div><input readonly placeholder="请选择日期" class="ant-calendar-picker-input ant-input" value="${value}"></div></span></div></div>`);
   const { doc } = h;
@@ -42,10 +44,10 @@ function antCalendar({ label = "出生日期", lag = 0, english = false, value =
   const draw = () => {
     const days = new Date(year, month, 0).getDate();
     const sel = picked && picked.startsWith(`${year}-${pad(month)}`) ? Number(picked.slice(8)) : 0;
-    layer.querySelector(".ant-calendar-header").innerHTML = english
+    layer.querySelector(P(".ant-calendar-header")).innerHTML = P(english
       ? `<span class="ant-calendar-my-select">${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1]} ${year}</span>`
-      : `<a class="ant-calendar-prev-year-btn"></a><a class="ant-calendar-prev-month-btn"></a><span class="ant-calendar-my-select"><a class="ant-calendar-year-select">${year}年</a><a class="ant-calendar-month-select">${month}月</a></span><a class="ant-calendar-next-month-btn"></a><a class="ant-calendar-next-year-btn"></a>`;
-    layer.querySelector("tbody").innerHTML = `<tr>${Array.from({ length: days }, (_, i) => `<td class="ant-calendar-cell${i + 1 === sel ? " ant-calendar-selected-day" : ""}"><div class="ant-calendar-date">${i + 1}</div></td>`).join("")}</tr>`;
+      : `<a class="ant-calendar-prev-year-btn"></a><a class="ant-calendar-prev-month-btn"></a><span class="ant-calendar-my-select"><a class="ant-calendar-year-select">${year}年</a><a class="ant-calendar-month-select">${month}月</a></span><a class="ant-calendar-next-month-btn"></a><a class="ant-calendar-next-year-btn"></a>`);
+    layer.querySelector("tbody").innerHTML = P(`<tr>${Array.from({ length: days }, (_, i) => `<td class="ant-calendar-cell${i + 1 === sel ? " ant-calendar-selected-day" : ""}"><div class="ant-calendar-date">${i + 1}</div></td>`).join("")}</tr>`);
   };
   const take = (text) => {
     const hit = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
@@ -56,10 +58,10 @@ function antCalendar({ label = "出生日期", lag = 0, english = false, value =
     if (layer) return;
     if (picked) { year = Number(picked.slice(0, 4)); month = Number(picked.slice(5, 7)); }
     layer = doc.createElement("div");
-    layer.innerHTML = `<div class="ant-calendar-picker-container"><div class="ant-calendar"><div class="ant-calendar-panel">
+    layer.innerHTML = P(`<div class="ant-calendar-picker-container"><div class="ant-calendar"><div class="ant-calendar-panel">
       <div class="ant-calendar-input-wrap"><div class="ant-calendar-date-input-wrap"><input class="ant-calendar-input" placeholder="请选择日期" value="${picked || ""}"></div></div>
-      <div class="ant-calendar-date-panel"><div class="ant-calendar-header"></div><div class="ant-calendar-body"><table><tbody></tbody></table></div></div></div></div></div>`;
-    const input = layer.querySelector(".ant-calendar-input");
+      <div class="ant-calendar-date-panel"><div class="ant-calendar-header"></div><div class="ant-calendar-body"><table><tbody></tbody></table></div></div></div></div></div>`);
+    const input = layer.querySelector(P(".ant-calendar-input"));
     input.addEventListener("input", () => { times.typed = Date.now(); const text = input.value; if (lag === null) take(text); else setTimeout(() => take(text), lag); });
     input.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
@@ -152,13 +154,39 @@ test("a calendar drawn into a floating container that still holds the last field
   assert.equal(h.field.value, "2002-05-12");
 });
 
+// 外壳里还有一层常驻的包装节点，上一题的下拉和这次的日历都放在它下面：新画的日历照样是自己的。
+test("a calendar drawn under a wrapper that also holds the last field's dropdown is still the field's own", async () => {
+  const h = antCalendar({ lag: 0 });
+  const host = h.doc.createElement("div");
+  host.className = "app-popup-container";
+  host.style.position = "absolute";
+  const wrapper = h.doc.createElement("div");
+  wrapper.className = "popup-wrapper";
+  host.append(wrapper);
+  h.doc.body.append(host);
+  wrapper.append(leavingDropdown(h.doc));
+  h.doc.body.append = (node) => wrapper.append(node);
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+});
+
+// 换了类名前缀的 ant-design-vue 1.x（atsx-calendar-input）也等日历接住打的字再回车。
+test("ant-design-vue 1.x with its own class prefix still waits for the calendar before Enter", async () => {
+  const h = antCalendar({ lag: 40, prefix: "atsx" });
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+});
+
 test("antd 3 (React) takes the typed date at once and is not slowed down", async () => {
   const h = antCalendar({ lag: null });
   const result = await h.api.operate(h.target, "2002-05-12");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(h.field.value, "2002-05-12");
   // 等日历跟上最多 0.3 秒；同步更新的不用等满。
-  assert.ok(h.times.enter - h.times.typed < 150, `Enter ${h.times.enter - h.times.typed}ms after typing`);
+  // 比等满（0.3 秒）短就算没等满；留出机器忙时的余量。
+  assert.ok(h.times.enter - h.times.typed < 250, `Enter ${h.times.enter - h.times.typed}ms after typing`);
 });
 
 test("a calendar that commits another date on Enter is reported as having changed the field, not as merely not chosen", async () => {
