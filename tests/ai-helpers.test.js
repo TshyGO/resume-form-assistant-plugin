@@ -238,13 +238,12 @@ test("findSelectOptionIndex: another way of writing the same thing is used when 
   assert.equal(pick(gb, "中共预备党员"), "中国共产党预备党员");
   // 「党员」同时包含于几项，同义的只有一项。
   assert.equal(pick(["中共党员", "中共预备党员", "农工党党员", "致公党党员"], "党员"), "中共党员");
-  // 外语等级、性别、学历、国家。
+  // 外语等级、性别、学历。
   assert.equal(pick(["四级", "六级", "专四", "专八"], "CET-6"), "六级");
   assert.equal(pick(["CET-4", "CET-6", "TEM-4", "TEM-8"], "专业英语四级"), "TEM-4");
   assert.equal(pick(["Male", "Female"], "女"), "Female");
   assert.equal(pick(["男", "女"], "男性"), "男");
   assert.equal(pick(["高中", "大专", "本科", "硕士研究生"], "大学专科"), "大专");
-  assert.equal(pick(["中国大陆", "中国香港", "中国澳门", "中国台湾"], "中国"), "中国大陆");
 });
 
 test("findSelectOptionIndex: synonyms stay inside their own meaning", () => {
@@ -255,6 +254,8 @@ test("findSelectOptionIndex: synonyms stay inside their own meaning", () => {
   // 国标里「群众」和「无党派民主人士」是两项。
   assert.equal(index(["无党派民主人士", "中共党员"], "群众"), -1);
   assert.equal(index(["无党派民主人士", "群众"], "无党派人士"), 0);
+  // 「中国」不当成「中国大陆」：港澳台居民的国籍也是中国。
+  assert.equal(index(["中国大陆", "中国香港", "中国澳门", "中国台湾"], "中国"), -1);
   // 「健康」「良好」不当同义。
   assert.equal(index(["健康", "一般", "较差"], "良好"), -1);
   // 两项都是同组的写法：不猜。
