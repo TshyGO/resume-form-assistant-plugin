@@ -489,6 +489,25 @@ test("rules: a group name does not turn a named field of another kind into the I
     { group: "证件信息", key: "号码1", value: "110101199003071234" },
     { group: "手机与微信", key: "号码1", value: "13800138000" }
   ]), { id: "110101199003071234", phone: "13800138000" });
+  // 7 位的固话按值认不出（按值要 8 位以上），只能靠分组名。
+  assert.deepEqual(ruleValues([textField("phone", "联系电话")], [{ group: "联系电话", key: "号码1", value: "6123456" }]), { phone: "6123456" });
+});
+
+// 字段名自己带着「证件」「手机」「电话」就算：「证件编号」里的「编号」、「手机/邮箱」里的「邮箱」不能把它挡在外面。
+test("rules: a key that names the ID or mobile itself fills it even if it also reads as another kind", () => {
+  const forms = [textField("id", "证件号码"), textField("phone", "手机号码")];
+  for (const key of ["证件编号", "证件账号", "证件卡号"]) {
+    assert.deepEqual(ruleValues(forms, [
+      { group: "基本信息", key, value: "110101199003071234" },
+      { group: "联系方式", key: "手机", value: "13800138000" }
+    ]), { id: "110101199003071234", phone: "13800138000" }, key);
+  }
+  for (const key of ["手机/邮箱", "邮箱/手机", "电话/邮箱"]) {
+    assert.deepEqual(ruleValues(forms, [
+      { group: "联系方式", key, value: "13800138000" },
+      { group: "基本信息", key: "身份证号", value: "110101199003071234" }
+    ]), { id: "110101199003071234", phone: "13800138000" }, key);
+  }
 });
 
 // 以前证件类型、学历、学位、年月这类下拉框被挡在 AI 外面，本地规则又不处理，永远填不上。

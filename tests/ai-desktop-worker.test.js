@@ -298,6 +298,21 @@ test('the page\'s local matches and the worker do not fill an admission ticket o
   assert.deepEqual(JSON.parse(JSON.stringify(result.matches)), expected);
 });
 
+// 字段名「证件编号」「手机/邮箱」自己带着「证件」「手机」：网页先填和 worker 都照样填进证件号码和手机。
+test('the page\'s local matches and the worker still fill keys named 证件编号 and 手机/邮箱', async () => {
+  const profile = require('../profile-fields.js');
+  const formFields = [{ fieldId: 'name', label: '姓名' }, { fieldId: 'id', label: '证件号码' },
+    { fieldId: 'phone', label: '手机号码' }, { fieldId: 'school', label: '学校' }];
+  const resumeFields = [{ group: '基本信息', key: '姓名', value: '测试用户' },
+    { group: '基本信息', key: '证件编号', value: '110101199003071234' }, { group: '联系方式', key: '手机/邮箱', value: '13800138000' },
+    { group: '教育背景', key: '学校', value: '大学乙' }];
+  const expected = [{ fieldId: 'name', value: '测试用户' }, { fieldId: 'id', value: '110101199003071234' }, { fieldId: 'phone', value: '13800138000' }];
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  const result = await env.run({ formFields, resumeFields });
+  assert.deepEqual(helpers.localRuleMatches(formFields, resumeFields, profile), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.matches)), expected);
+});
+
 // #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
 test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
   const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));

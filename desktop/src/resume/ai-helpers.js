@@ -512,12 +512,15 @@
   function isResumeFieldMatch(semantic, resumeField, formField, keyType = () => resumeKeyType(resumeField?.key)) {
     const keyText = normalizeText([resumeField?.group, resumeField?.key].filter(Boolean).join(" "));
     const value = String(resumeField?.value ?? "").trim();
-    // 字段名认得出是哪一类（手机、身份证号、微信、姓名）就只按名字算，认不出的（自定义的「号码1」）才看分组名和值。
+    const ownKey = normalizeText(resumeField?.key);
+    // 字段名自己带着「手机」「证件」这类词就算，哪怕它归到了别的类（「证件编号」算别的号码，「手机/邮箱」算邮箱）。
+    // 不带的，字段名认得出是哪一类（微信、准考证号、姓名）就只按名字算，认不出的（自定义的「号码1」）才看分组名和值：
     // 手机号也是 8 到 18 位数字，纯数字的身份证号也像电话，按值算会让排在前面的那项填进另一个框；
     // 分组名同理，「证件信息」下的准考证号、「手机与微信」下的微信不是证件号码和手机。
-    const byKeyName = (fallback) => {
+    const byKeyName = (words, pattern, text = value) => {
+      if (words.some((word) => ownKey.includes(word))) return true;
       const type = keyType();
-      return type ? type === semantic : fallback;
+      return type ? type === semantic : words.some((word) => keyText.includes(word)) || pattern.test(text);
     };
 
     switch (semantic) {
@@ -526,15 +529,15 @@
       case "email":
         return /@/.test(value) || keyText.includes("邮箱") || keyText.includes("email");
       case "phone":
-        return byKeyName(/^(\+?\d[\d\s-]{7,})$/.test(value) || keyText.includes("手机") || keyText.includes("电话"));
+        return byKeyName(["手机", "电话"], /^(\+?\d[\d\s-]{7,})$/);
       case "gender":
         // 按值猜只收整个值就是性别的，带「女」字的经历描述不算。
-        return byKeyName(/^(男|女|男性|女性|male|female)$/i.test(value) || keyText.includes("性别"));
+        return byKeyName(["性别"], /^(男|女|男性|女性|male|female)$/i);
       case "birth_date":
         // 日期看不出是谁的：毕业时间、实习起止时间也是这个样子，出生日期只按名字认。
         return /出生|生日|birth/.test(keyText) || keyType() === "birth_date";
       case "id_number":
-        return byKeyName(keyText.includes("身份证") || keyText.includes("证件") || /^[0-9xX]{8,18}$/.test(value.replace(/\s/g, "")));
+        return byKeyName(["身份证", "证件"], /^[0-9xX]{8,18}$/, value.replace(/\s/g, ""));
       case "hometown":
         return isSameRegionTopic(resumeField, formField);
       case "region":
