@@ -357,7 +357,9 @@
   function looksLikeMail(bytes) {
     const start = new TextDecoder().decode(bytes.subarray(0, 65536));
     const headers = start.split(/\r?\n\r?\n/, 1)[0];
-    return !/^\s*(?:<!doctype|<html)/i.test(start)
+    // An HTML fragment may display real RFC headers inside <pre>/<textarea>.
+    // Keep the original bytes; never mistake that display wrapper for MIME.
+    return !/^\s*</.test(start)
       && /^(?:From|Subject|Date):[^\r\n]+/im.test(headers)
       && (headers.match(/^(?:From|To|Subject|Date|Message-ID|MIME-Version|Content-Type):/gim) || []).length >= 2;
   }

@@ -72,6 +72,14 @@ test('HTML original preview, login pages and raw download failures do not become
     assert.equal((await webmail.capture(original(), async () => new Response(body))).status, 'original_unavailable');
   }
 });
+test('HTML fragments displaying genuine-looking RFC headers are never archived as original MIME', async () => {
+  for (const tag of ['pre', 'textarea', 'div']) {
+    const html = `<${tag}>\nFrom: hr@example.test\nSubject: Interview\nMIME-Version: 1.0\n\nBody\n</${tag}>`;
+    assert.equal(webmail.looksLikeMail(Buffer.from(html)), false);
+    assert.equal((await webmail.capture(gmail({ cards: card({ extra: link() }) }), async () => new Response(html))).status, 'excerpt_offer');
+    assert.equal((await webmail.capture(original(), async () => new Response(html))).status, 'original_unavailable');
+  }
+});
 test('missing raw links use explicit excerpt fallback without constructing internal endpoints', async () => {
   const got = await webmail.capture(gmail(), () => { throw new Error('no guessed endpoints'); });
   assert.equal(got.status, 'excerpt_offer'); assert.equal(got.bytesBase64, undefined);
