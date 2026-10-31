@@ -245,6 +245,16 @@ test('AntD 4/5 search select without a popup before typing is searched in its ow
   assert.equal(h.input.value, '');
 });
 
+// #429 边输边搜的政治面貌，选项是国标全称：打「共青团员」搜不到「中国共产主义青年团团员」，打共有的「团员」。
+test('AntD 4/5 search select types the part every way of writing shares when the value is written another way', async () => {
+  const h = antd4(['中国共产党党员', '中国共产党预备党员', '中国共产主义青年团团员', '群众'], { label: '政治面貌', remote: true });
+  const result = await h.api.operate(h.target, '共青团员');
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(h.searches, ['团员']);
+  assert.deepEqual(h.picked, ['中国共产主义青年团团员']);
+  assert.equal(h.input.value, '');
+});
+
 test('AntD 4/5 select picks from its rendered options as before', async () => {
   const majors = Array.from({ length: 120 }, (_, index) => `专业${String(index + 1).padStart(3, '0')}`);
   const h = antd4(majors);

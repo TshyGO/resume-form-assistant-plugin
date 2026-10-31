@@ -119,7 +119,8 @@ test("Beisen constant selector opened before its dictionary has loaded: the opti
 test("Beisen constant selector still loading: a value below the first screen is searched for once the list is there", async (t) => {
   const run = await choose(t, "民族", "土家族", { choices: ETHNIC, loadMs: 600 });
   assert.equal(run.shown(), "土家族", run.diag);
-  assert.deepEqual(run.searches, ["土家族"]);
+  // #429 搜的是「土家族」「土家」两种写法共有的「土家」（ai-helpers.js 的 optionSearchText）。
+  assert.deepEqual(run.searches, ["土家"]);
   assert.equal(run.result.filledCount, 1);
 });
 
@@ -146,7 +147,7 @@ test("textless elements named lazyloading or loading-done are not a loading list
   // 「加载完成」标记当成加载中，搜索后就一直等不到列表好。
   const run = await choose(t, "民族", "土家族", { choices: ETHNIC, extra: `<img class="avatar lazyloading" alt=""><span class="loading-done"></span>` });
   assert.equal(run.shown(), "土家族", run.diag);
-  assert.deepEqual(run.searches, ["土家族"]);
+  assert.deepEqual(run.searches, ["土家"]);
   assert.equal(run.result.filledCount, 1);
 });
 
@@ -155,7 +156,7 @@ test("a loading icon faded out with opacity 0 but still mounted is not a loading
     + `<div style="opacity:0"><span class="mask-loading"></span></div>`;
   const run = await choose(t, "民族", "土家族", { choices: ETHNIC, extra });
   assert.equal(run.shown(), "土家族", run.diag);
-  assert.deepEqual(run.searches, ["土家族"]);
+  assert.deepEqual(run.searches, ["土家"]);
   assert.equal(run.result.filledCount, 1);
 });
 

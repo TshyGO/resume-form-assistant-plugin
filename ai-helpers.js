@@ -35,13 +35,50 @@
   const MOBILE_VALUE = /^(\+?86)?1[3-9]\d{9}$/;
   const CN_ID_VALUE = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dxX]$/;
 
-  // #301 #418 证件类型的几种叫法：「我的信息」写全称（profile-fields.js），网站常写简称，旁边还有「香港居民身份证」这类，
-  // 按包含比会几项都沾边。只收确定是同一种证件的；「港澳通行证」也可能是内地居民往来港澳通行证，不收。
-  const ID_TYPE_NAMES = [
+  // #429 下拉、单选的选项和资料是同一个意思的不同写法，又不是包含关系（「汉族」对「汉」、「共青团员」对「中国共产主义青年团团员」）。
+  // 每组是同一个意思的几种写法，选项里正好一项是同组的另一种写法才用它（findSelectOptionIndex）。只收确定同义的：
+  // 学历和学位不混（「本科」不等于「学士」）；「群众」和「无党派人士」在国标（GB/T 4762）里是两项；
+  // 「港澳通行证」也可能是内地居民往来港澳通行证，不当成回乡证。一种写法只能在一组里（tests/ai-helpers.test.js 查）。
+  const ETHNIC_NAMES = ("汉 蒙古 回 藏 维吾尔 苗 彝 壮 布依 朝鲜 满 侗 瑶 白 土家 哈尼 哈萨克 傣 黎 傈僳 佤 畲 高山 拉祜 水 东乡 纳西 景颇 柯尔克孜 土 "
+    + "达斡尔 仫佬 羌 布朗 撒拉 毛南 仡佬 锡伯 阿昌 普米 塔吉克 怒 乌孜别克 俄罗斯 鄂温克 德昂 保安 裕固 京 塔塔尔 独龙 鄂伦春 赫哲 门巴 珞巴 基诺").split(" ");
+  const OPTION_SYNONYMS = [
+    // 证件类型（#418）：「我的信息」写全称（profile-fields.js），网站常写简称，旁边还有「香港居民身份证」这类。
     ["居民身份证", "身份证", "中国居民身份证", "中华人民共和国居民身份证", "大陆居民身份证", "二代身份证"],
     ["港澳居民来往内地通行证", "回乡证"],
-    ["台湾居民来往大陆通行证", "台胞证"]
-  ].map((names) => new Set(names.map(normalizeText)));
+    ["台湾居民来往大陆通行证", "台胞证"],
+    // 政治面貌：国标全称（GB/T 4762）、常用简称。
+    ["中共党员", "中国共产党党员", "共产党员", "党员"],
+    ["中共预备党员", "中国共产党预备党员", "预备党员"],
+    ["共青团员", "中国共产主义青年团团员", "团员"],
+    ["民革会员", "中国国民党革命委员会会员"],
+    ["民盟盟员", "中国民主同盟盟员"],
+    ["民建会员", "中国民主建国会会员"],
+    ["民进会员", "中国民主促进会会员"],
+    ["农工党党员", "中国农工民主党党员"],
+    ["致公党党员", "中国致公党党员"],
+    ["台盟盟员", "台湾民主自治同盟盟员"],
+    ["无党派人士", "无党派民主人士", "无党派"],
+    // 民族（GB/T 3304 的 56 个民族）：带不带「族」字。
+    ...ETHNIC_NAMES.map((name) => [`${name}族`, name]),
+    // 学历：只收学历自己的写法，「硕士」「博士」也是学位，不放进来。
+    ["大学本科", "本科"],
+    ["大学专科", "专科", "大专"],
+    // 外语等级。
+    ["CET-4", "大学英语四级", "英语四级", "四级"],
+    ["CET-6", "大学英语六级", "英语六级", "六级"],
+    ["TEM-4", "专业英语四级", "英语专业四级", "专四"],
+    ["TEM-8", "专业英语八级", "英语专业八级", "专八"],
+    // 性别：英文表单。
+    ["男", "男性", "Male"],
+    ["女", "女性", "Female"],
+    // 国籍、国家/地区：选项把港澳台分开列时，「中国」是中国大陆。
+    ["中国", "中国大陆", "中华人民共和国", "中国内地"]
+  ];
+  const SYNONYM_GROUPS = new Map();
+  for (const names of OPTION_SYNONYMS) {
+    const group = { names, normalized: new Set(names.map(normalizeText)) };
+    for (const name of group.normalized) if (!SYNONYM_GROUPS.has(name)) SYNONYM_GROUPS.set(name, group);
+  }
 
   function detectCascadeGroups(fields, fieldMap) {
     const selectFields = fields.filter((f) => f.tagName === "select");
@@ -125,6 +162,8 @@
     localRuleMatches,
     selectResumeCandidates,
     findSelectOptionIndex,
+    isSameOptionText,
+    optionSearchText,
     isPlaceholderOption,
     filterValidMatches,
     semanticizeParsedFields,
@@ -359,10 +398,10 @@
       || normalizeText(optionValue(option)) === normalizedTarget);
     if (index >= 0) return index;
 
-    // 证件类型（见 ID_TYPE_NAMES）：选项里正好一项是同一种证件的另一种叫法才用它，几项都是就照下面的规则。
-    const idNames = ID_TYPE_NAMES.find((names) => names.has(normalizedTarget));
-    const sameId = idNames ? usable.filter(({ option }) => idNames.has(normalizeText(optionText(option))) || idNames.has(normalizeText(optionValue(option)))) : [];
-    if (sameId.length === 1) return sameId[0].index;
+    // 同一个意思的另一种写法（见 OPTION_SYNONYMS）：选项里正好一项是才用它，几项都是就照下面的规则。
+    const names = SYNONYM_GROUPS.get(normalizedTarget)?.normalized;
+    const synonyms = names ? usable.filter(({ option }) => names.has(normalizeText(optionText(option))) || names.has(normalizeText(optionValue(option)))) : [];
+    if (synonyms.length === 1) return synonyms[0].index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
     const negatedBefore = (text, at) => /(非|不|无|未)$/.test(text.slice(0, at));
@@ -387,6 +426,27 @@
     });
 
     return candidates.length === 1 ? candidates[0] : -1;
+  }
+
+  // 选项文字和要填的值是不是同一项：归一化后相同，或是同一个意思的另一种写法（OPTION_SYNONYMS）。
+  // 虚拟列表只画出一部分时只认这样的一项（custom-controls.js 的 match）。
+  function isSameOptionText(text, value) {
+    const a = normalizeText(text);
+    const b = normalizeText(value);
+    if (!a || !b) return false;
+    return a === b || Boolean(SYNONYM_GROUPS.get(b)?.normalized.has(a));
+  }
+
+  // 下拉框里搜索时打的字：要填的值有别的写法、且每种写法都含着其中最短的一种时打这一种
+  // （「土家族」打「土家」，选项写「土家」也搜得到），否则照原样打。
+  function optionSearchText(value) {
+    const raw = String(value ?? "").trim();
+    const group = SYNONYM_GROUPS.get(normalizeText(raw));
+    if (!group) return raw;
+    const core = group.names
+      .filter((name) => Array.from(group.normalized).every((other) => other.includes(normalizeText(name))))
+      .sort((a, b) => a.length - b.length)[0];
+    return core || raw;
   }
 
   // 籍贯、高考生源地、户口所在地是三个问题，不能互相顶替；同一个问题下的省、市、县也要分清。
