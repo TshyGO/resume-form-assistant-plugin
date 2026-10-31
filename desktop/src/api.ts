@@ -126,6 +126,16 @@ export interface EvidencePreview extends EvidenceSummary {
   note: string | null;
 }
 
+export interface EvidencePurgePreview {
+  target: { evidenceId: string; archiveId: string; restoreEpoch: string; blobSha256: string };
+  title: string;
+  originalShared: boolean;
+}
+export interface EvidencePurgeResult {
+  originalShared: boolean;
+  cleanupPending: boolean;
+}
+
 export interface ImportReport {
   imported: EvidenceSummary[];
   duplicates: EvidenceSummary[];

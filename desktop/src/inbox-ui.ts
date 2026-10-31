@@ -1,4 +1,5 @@
 import { mountAttachmentList } from "./attachment-list.ts";
+import { openSettingsDialog, fragment, paragraph } from "./settings-dialog.ts";
 // D09「招聘通知」视图（原「证据收件箱」，#262 改版）：拖入 / 选择 / 粘贴 → 列表 → 预览 →
 // 关联与分类。左侧只列还没关联申请的材料，关联之后材料进对应申请的详情。
 //
@@ -9,6 +10,8 @@ import type {
   ApplicationSummary,
   EvidencePreview,
   EvidenceSummary,
+  EvidencePurgePreview,
+  EvidencePurgeResult,
   ImportReport,
   Invoke,
   Page,
@@ -352,7 +355,7 @@ export function mountInbox(
     renderList();
     preview.innerHTML = '<p class="pane-loading muted">正在读取回收站…</p>';
     const refreshed = await refresh();
-    if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件，或恢复到原位置。</p></div>' : emptyState();
+    if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件、恢复到原位置，或永久删除。</p></div>' : emptyState();
   }
 
   function mailFacts(item: EvidencePreview) {
@@ -402,7 +405,7 @@ export function mountInbox(
             ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开</button>` : ""}
             ${recycled ? '<button type="button" data-act="restore" class="primary">恢复通知</button>' : `<button type="button" data-act="toggle-organizer" title="整理与关联（含 AI 整理）" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}<span>整理与关联</span></button>`}
             <button type="button" class="evidence-icon-button" data-act="toggle-reader" aria-pressed="${expanded}" aria-label="${readerLabel}" title="${readerLabel}">${expanded ? ICON.collapse : ICON.expand}</button>
-            ${recycled ? '' : `<button type="button" class="evidence-icon-button evidence-recycle-button" data-act="recycle" aria-label="移到回收站" title="移到回收站">${ICON.trash}</button>`}
+            ${recycled ? '<button type="button" class="evidence-recycle-button" data-act="purge">永久删除</button>' : `<button type="button" class="evidence-icon-button evidence-recycle-button" data-act="recycle" aria-label="移到回收站" title="移到回收站">${ICON.trash}</button>`}
           </div>
         </header>
         <div class="evidence-workspace">
@@ -515,6 +518,40 @@ export function mountInbox(
     if (acting) return;
     const selectionToken = previewToken;
     try {
+      if (action === "purge") {
+        setActing(true);
+        const confirmation = await invoke<EvidencePurgePreview>("preview_evidence_purge_cmd", { evidenceId: item.id });
+        if (selectionToken !== previewToken || selectedId !== item.id || listMode !== "recycled") return;
+        let result: EvidencePurgeResult | null = null;
+        const confirmed = await openSettingsDialog({
+          title: "永久删除这条通知？",
+          intro: confirmation.title,
+          body: fragment(
+            paragraph("将删除这条通知的正文、关联和 AI 整理建议，并清理不再被其他通知引用的原件及内嵌附件。申请、已记录的进度和待办保留。"),
+            confirmation.originalShared && paragraph("这份原件还被其他通知使用，共用文件会保留。"),
+            paragraph("删除后无法在回收站恢复。已有备份不会一并删除；邮箱中的邮件不受影响。", "settings-dialog-warn"),
+          ),
+          confirmLabel: "永久删除", busyLabel: "正在删除…", tone: "danger", size: "md",
+          action: async () => { result = await invoke<EvidencePurgeResult>("purge_recycled_evidence_cmd", { target: confirmation.target }); },
+          describeError: error => `删除失败：${invokeError(error)}`,
+        });
+        if (!confirmed || !result) return;
+        const done = result as EvidencePurgeResult;
+        const message = done.cleanupPending
+          ? "通知已永久删除，但原件文件尚未清理完成。可到设置中的附件检查重试清理。"
+          : `通知已永久删除。${done.originalShared ? "其他通知仍在使用的共用原件已保留。" : "不再被引用的原件及内嵌附件已清理。"}`;
+        // Drop the deleted body's local preview even if reloading the list fails.
+        items = items.filter(entry => entry.id !== item.id);
+        renderList();
+        if (selectedId === item.id) {
+          selectedId = null; previewToken += 1;
+          clearAiPanel(); clearAttachments?.(); clearAttachments = null;
+          preview.innerHTML = items.length ? emptyPreview : emptyState();
+        }
+        say({ tone: done.cleanupPending ? "warn" : "success", text: message });
+        if (!await refresh()) say({ tone: "warn", text: `${message}列表暂时无法刷新，请稍后重新读取。` });
+        return;
+      }
       if (action === "recycle" || action === "restore") {
         setActing(true);
         await invoke("set_evidence_recycled_cmd", { evidenceId: item.id, recycled: action === "recycle" });

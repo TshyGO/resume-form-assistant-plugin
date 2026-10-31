@@ -538,6 +538,49 @@ impl StoreTx<'_> {
         Ok(evidence)
     }
 
+    /// Delete only an explicitly recycled notification. Keep zero-reference blob
+    /// metadata until the host removes its file, so failed cleanup stays repairable.
+    pub fn purge_recycled_evidence(
+        &mut self,
+        id: &str,
+        expected_blob: &str,
+    ) -> Result<ReplyEvidence, StoreError> {
+        let mut evidence = self.get_evidence(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("evidence {id}")))?;
+        if !self.is_evidence_recycled(id)? {
+            return Err(StoreError::Validation("通知不在回收站，未执行永久删除。".into()));
+        }
+        if evidence.blob.meta.sha256 != expected_blob {
+            return Err(StoreError::Conflict("通知内容已改变，请重新确认删除。".into()));
+        }
+        self.conn().execute(
+            "UPDATE message_receipts SET purged=1 WHERE result_id=?1", [id],
+        )?;
+        self.conn().execute("DELETE FROM ai_suggestions WHERE evidence_id=?1", [id])?;
+        self.conn().execute("DELETE FROM reply_evidence WHERE id=?1", [id])?;
+        // Recount actual references, including other recycled notifications.
+        self.conn().execute(
+            "UPDATE attachment_blobs SET ref_count=(SELECT COUNT(*) FROM reply_evidence WHERE blob_sha256=?1) WHERE sha256=?1",
+            [&evidence.blob.meta.sha256],
+        )?;
+        evidence.blob.ref_count = self.find_blob(&evidence.blob.meta.sha256)?
+            .ok_or_else(|| StoreError::NotFound("original blob".into()))?.ref_count;
+        let now = now_utc();
+        self.append_events(evidence.application_id.as_deref(), &[EventDraft {
+            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            source: EventSource::Manual, source_request_id: None, actor: Actor::User,
+            payload: EventPayload::Custom {
+                event_type: "custom.evidence_purged".into(),
+                data: serde_json::json!({"evidence_id": id}),
+                stage_update_mode: StageUpdateMode::HistoryOnly,
+            },
+        }], &now)?;
+        if let Some(app) = evidence.application_id.as_deref() {
+            self.recompute_reply_state(app)?;
+        }
+        Ok(evidence)
+    }
+
     /// 维护检查(不自动删除):零引用 blob 与悬空证据引用。
     /// 删掉一条**零引用**的 blob 记录（D12 清理孤儿附件时用）。
     ///

@@ -22,6 +22,7 @@ mod nm_register_tests;
 mod cli;
 mod commands;
 mod evidence_commands;
+mod evidence_purge;
 mod mail_import;
 mod attachment_commands;
 mod mailbox_commands;
@@ -570,6 +571,16 @@ fn set_evidence_recycled_cmd(
     recycled: bool,
 ) -> Result<evidence_commands::EvidenceSummary, CommandError> {
     with_store(&state, |store| evidence_commands::set_recycled(store, &evidence_id, recycled))
+}
+
+#[tauri::command]
+fn preview_evidence_purge_cmd(state: State<AppState>, evidence_id: String) -> Result<evidence_purge::PurgePreview, CommandError> {
+    with_store(&state, |store| evidence_purge::preview(store, &evidence_id))
+}
+
+#[tauri::command]
+fn purge_recycled_evidence_cmd(state: State<AppState>, target: evidence_purge::PurgeTarget) -> Result<evidence_purge::PurgeResult, CommandError> {
+    with_store(&state, |store| evidence_purge::purge(store, target))
 }
 
 #[tauri::command]
@@ -2137,6 +2148,8 @@ pub fn run() {
             list_inbox_cmd,
             list_recycled_evidence_cmd,
             set_evidence_recycled_cmd,
+            preview_evidence_purge_cmd,
+            purge_recycled_evidence_cmd,
             get_evidence_preview_cmd,
             attachment_commands::list_evidence_attachments_cmd,
             attachment_commands::preview_evidence_attachment_cmd,

@@ -228,3 +228,70 @@ fn a_stale_ai_confirmation_cannot_modify_a_recycled_notification() {
         .reply_class
         .is_none());
 }
+
+#[test]
+fn permanent_notification_delete_requires_recycling_and_matching_original() {
+    let d = tempfile::tempdir().unwrap();
+    let store = open(d.path());
+    let e = evidence(&store, None);
+    assert!(store.purge_recycled_evidence(&e.id, &e.blob.meta.sha256).is_err());
+    store.set_evidence_recycled(&e.id, true).unwrap();
+    assert!(store.purge_recycled_evidence(&e.id, &"b".repeat(64)).is_err());
+    assert!(store.get_evidence(&e.id).unwrap().is_some());
+    assert!(store.is_evidence_recycled(&e.id).unwrap());
+    store.set_evidence_recycled(&e.id, false).unwrap();
+    assert!(store.purge_recycled_evidence(&e.id, &e.blob.meta.sha256).is_err());
+}
+
+#[test]
+fn permanent_delete_preserves_shared_blobs_and_application_history_and_removes_suggestions() {
+    let d = tempfile::tempdir().unwrap();
+    let store = open(d.path());
+    let application = app(&store);
+    let first = evidence(&store, Some(application.clone()));
+    let other = evidence(&store, None);
+    let suggestion = store.create_suggestion(archive_store::NewAiSuggestion {
+        evidence_id: first.id.clone(), candidate_application_ids: vec![application.clone()],
+        suggested_stage: None, suggested_round: None, suggested_reply_class: ReplyClass::Other,
+        suggested_send_mode: SendMode::Unknown, suggested_todos: vec![], excerpt_refs: None,
+        uncertainties: None, model_label: None, prompt_scope: None,
+    }).unwrap();
+    store.set_evidence_recycled(&first.id, true).unwrap();
+    store.set_evidence_recycled(&other.id, true).unwrap();
+    let before = store.get_application(&application).unwrap().unwrap();
+    let removed = store.purge_recycled_evidence(&first.id, &first.blob.meta.sha256).unwrap();
+    assert_eq!(removed.blob.ref_count, 1);
+    assert!(store.get_evidence(&first.id).unwrap().is_none());
+    assert!(!store.is_evidence_recycled(&first.id).unwrap());
+    assert!(store.get_suggestion(&suggestion.id).unwrap().is_none());
+    assert!(store.get_evidence(&other.id).unwrap().is_some());
+    assert!(store.is_evidence_recycled(&other.id).unwrap());
+    let after = store.get_application(&application).unwrap().unwrap();
+    assert_eq!(before.current_stage, after.current_stage);
+    assert!(store.list_events(&application).unwrap().len() >= 3);
+    let last = store.purge_recycled_evidence(&other.id, &other.blob.meta.sha256).unwrap();
+    assert_eq!(last.blob.ref_count, 0);
+    assert_eq!(store.check_attachment_refs().unwrap().zero_ref_blobs, vec![first.blob.meta.sha256.clone()]);
+    assert!(store.remove_unreferenced_blob(&first.blob.meta.sha256).unwrap());
+    assert!(store.find_blob(&first.blob.meta.sha256).unwrap().is_none());
+    assert!(store.purge_recycled_evidence(&other.id, &other.blob.meta.sha256).is_err());
+    drop(store);
+    let store = open(d.path());
+    assert!(store.list_recycled_evidence().unwrap().is_empty());
+}
+
+#[test]
+fn permanent_delete_keeps_a_minimal_purged_receipt() {
+    let d = tempfile::tempdir().unwrap(); let store = open(d.path());
+    let e = evidence(&store, None); store.set_evidence_recycled(&e.id, true).unwrap();
+    let identity = store.identity(); drop(store);
+    let conn = rusqlite::Connection::open(d.path().join("archive/archive.db")).unwrap();
+    conn.execute("INSERT INTO message_receipts(archive_id,client_instance_id,message_id,source_restore_epoch,payload_sha256,operation_sha256,result_id,result_kind,operation_type,committed_at) VALUES (?1,'client','request',?2,?3,?3,?4,'evidence','mail.import','2026-10-31T00:00:00Z')",
+        rusqlite::params![identity.archive_id, identity.restore_epoch, "b".repeat(64), e.id]).unwrap();
+    drop(conn);
+    let store = open(d.path()); store.purge_recycled_evidence(&e.id, &e.blob.meta.sha256).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(d.path().join("archive/archive.db")).unwrap();
+    assert_eq!(conn.query_row("SELECT purged FROM message_receipts WHERE message_id='request'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM reply_evidence", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+}
