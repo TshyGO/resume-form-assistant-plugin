@@ -249,7 +249,8 @@ test("a text box retried through its suggestions ignores a list the field before
   input.addEventListener("blur", () => { box?.remove(); box = null; input.value = model; });
   const stale = leavingDropdown(doc);
   stale.querySelector("li").textContent = "北京大学";
-  input.addEventListener("keydown", () => setTimeout(() => stale.classList.add("slide-up-leave"), 5));
+  // 打字的同时它开始退场（class 变了），比建议框先动：插件不能把它当成建议框点。
+  input.addEventListener("keydown", () => stale.classList.add("slide-up-leave"));
   const result = await h.api.operate(scanned(doc, "毕业院校"), "北京大学");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(input.value, "北京大学");
