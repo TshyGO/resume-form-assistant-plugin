@@ -31,7 +31,8 @@ const SECTIONS = { 页面: "- 页面：", 填写: "- 填写方式：", 字段漏
   匹配: "- 匹配：", 性能: "- 各阶段耗时", 未填字段: "- 没填上的字段", 岗位: "岗位流程的固定代码" };
 // [未填字段] tokens: control structure, the reason code, the popup and whether it had any option.
 const TOKENS = { tag: "标签名", type: "类型", role: "role", popup: "控件结构", readonly: "控件结构", picker: "控件结构", lib: "组件库",
-  reason: "失败原因码", opened: "弹层有没有出现", options: "里面有没有选项（不含选项个数" };
+  reason: "失败原因码", opened: "弹层有没有出现", options: "里面有没有选项（不含选项个数", inputmode: "输入方式 inputmode",
+  after: "框里剩下的是空的、原来的内容还是别的内容（不含内容本身）", overlay: "填写后 1 秒内有没有冒出建议框或别的弹层" };
 // The worker's [来源] lines.
 const SOURCE = { app_version: "版本", os: "系统", install: "安装方式", host: "域名" };
 
@@ -54,8 +55,9 @@ test("the worker's [来源] lines and the unfilled-control tokens are the ones l
   const source = text.slice(text.indexOf("[来源]") + 5).trim().split("\n").map(line => line.split(":")[0]);
   assert.deepEqual(source, Object.keys(SOURCE));
   const report = core.fillReport({ fieldCount: 1, unfilledControls: [{ label: "学历", reasonCode: "no_option_match", observed: { opened: "listbox", hasOptions: true },
-    control: { tag: "input", type: "text", role: "combobox", readOnly: true, picker: "antd", library: "antd", popup: "listbox" } }] });
-  const tokens = report.split("\n").find(line => line.startsWith("- 学历: ")).slice(7).split(" ")
+    control: { tag: "input", type: "text", role: "combobox", readOnly: true, picker: "antd", library: "antd", popup: "listbox" } },
+  { label: "出生年月", reasonCode: "value_reverted", observed: { after: "empty", overlay: "none" }, control: { tag: "input", type: "text", inputMode: "numeric" } }] });
+  const tokens = report.split("\n").filter(line => /^- (?:学历|出生年月): /.test(line)).flatMap(line => line.replace(/^- [^:]+: /, "").split(" "))
     .map(token => /^[a-z]+\[/.test(token) ? ["tag", "type"] : token.split("=")[0]).flat();
   assert.deepEqual([...new Set(tokens)].sort(), Object.keys(TOKENS).sort());
   // Every keyed token CONTROL_TOKEN accepts (role=, lib=, opened=...), read from its source, so a
@@ -70,6 +72,7 @@ test("the notice names what reports now carry, and when they are sent", () => {
   const ui = read("feedback-ui.js");
   const notice = ui.slice(ui.indexOf("const explanation"), ui.indexOf("if (compact && noticeRoot)"));
   for (const words of ["AI 请求失败", "安装方式", "从哪里开始填写", "网页当时是否在前台", "有没有弹出、里面有没有选项", "模型档位", "多久开始回复",
+    "没写上的输入框后来是空的还是被改了", "写入后有没有冒出建议框或别的弹层",
     "保存岗位的过程", "不含公司和岗位名"]) {
     assert.ok(notice.includes(words), words);
   }

@@ -24,7 +24,8 @@
   // layui 的选项列表 dl 在组件根 .layui-form-select 里面（#301）。
   const POPUP_SELECTOR = "[role='listbox'], [role='tree'], [role='menu'], [role='option'], .layui-form-select > dl";
   const POPUP_TOKEN = /[-_](?:dropdown|popper|popover|popup)(?:[-_]?(?:menu|panel|content|wrapper|list|inner))?$|^(?:dropdown-menu|popper|popover)$/i;
-  const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor']";
+  // #301 简道云表单的日期框：.fx-form-datetime 里的 .x-datetime（类名不带 date-picker）。
+  const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor'], .fx-form-datetime .x-datetime";
   const SELECT_TOKEN = /(?:^|[-_])(?:select|selector|cascader|combobox|combo|dropdown|autocomplete|treeselect|multiselect|picker)(?:$|[-_])/i;
   // #269 只有类名、没有别的信号时，只认明确是选择框的词（北森 phoenix-select、Moka sd-Select）；
   // autocomplete、combo 这类可能允许自由输入，picker 可能是日期；Tailwind 的 select-none 之类不是组件。
@@ -234,7 +235,8 @@
     const pageEdge = el.closest("header, footer");
     if (pageEdge && !pageEdge.parentElement?.closest(CONTENT_SCOPE_SELECTOR)) return true;
     for (let node = el.parentElement; node && node.tagName !== "BODY"; node = node.parentElement) {
-      const tokens = [...classTokens(node), node.id || ""].map((token) => token.toLowerCase());
+      // #408 id 要读属性：表单里有 name 或 id 叫 id 的控件时，form.id 是那个控件（antd 把字段名写进 id）。
+      const tokens = [...classTokens(node), attr(node, "id")].map((token) => token.toLowerCase());
       if (tokens.some((token) => CHROME_TOKENS.has(token)) && !node.querySelector("form, [role='form']")) return true;
     }
     return false;
@@ -292,6 +294,7 @@
   function pickerTypeOf(root) {
     if (root.closest(".ant-picker") || root.matches(".ant-picker") || root.querySelector?.(".ant-picker")) return "antd";
     if (root.closest(".el-date-editor") || root.matches(".el-date-editor")) return "element";
+    if (root.matches(".fx-form-datetime .x-datetime")) return "jiandaoyun";
     return "generic";
   }
 
@@ -678,6 +681,110 @@
     return text ? { text, source: "table-header", labelEl: header, row } : null;
   }
 
+  // #301 div 画的表格（简道云子表单）：格子按这一行里同类格子的位置，对上表头那一行同一列。
+  // 只认类名以 cell 结尾、不在 td / th 里的格子（Element、vxe 这类表格 td 里的 div.cell 归 tableLabel）。
+  // 表头那一行在同一个表格容器里（往上最多 4 层）、它或它外层带 head / header 类名（简道云 .subform-head）、
+  // 排在这一行前面、和这一行长得不一样（不是另一条明细）、同类格子一样多、里面没有控件。
+  // 对不上就不取，免得读错列：题目格和填写格交替的 div 网格、Vant 的 cell 列表都没有表头。
+  const CELL_TOKEN = /(?:^|[-_])cell$/i;
+  const HEAD_TOKEN = /(?:^|[-_])(?:head|header|thead)(?:$|[-_])/i;
+  function gridLabel(control, item, ctx) {
+    let cell = null;
+    let key = "";
+    for (let node = control.root.parentElement, depth = 0; node && node !== ctx.body && depth < 8; node = node.parentElement, depth += 1) {
+      key = classTokens(node).find((token) => CELL_TOKEN.test(token)) || "";
+      if (key) {
+        cell = node;
+        break;
+      }
+    }
+    if (!cell || cell.closest("td, th") || !(cell.contains(item) || item.contains(cell))) return null;
+    const row = cell.parentElement;
+    const cellsOf = (node) => Array.from(node.children).filter((child) => classTokens(child).includes(key));
+    const cells = row && attr(row, "class") ? cellsOf(row) : [];
+    const column = cells.indexOf(cell);
+    if (column < 0) return null;
+    for (let scope = row.parentElement, depth = 0; scope && scope !== ctx.body && depth < 4; scope = scope.parentElement, depth += 1) {
+      const rows = new Set();
+      for (const other of Array.from(scope.getElementsByClassName(key))) {
+        const parent = other.parentElement;
+        if (parent && parent !== row && !parent.contains(row) && isBefore(parent, row)) rows.add(parent);
+      }
+      const headed = (candidate) => {
+        for (let node = candidate; node && node !== scope; node = node.parentElement) {
+          if (classTokens(node).some((token) => HEAD_TOKEN.test(token))) return true;
+        }
+        return false;
+      };
+      const header = Array.from(rows).filter((candidate) => !sameShape(candidate, row) && headed(candidate)
+        && cellsOf(candidate).length === cells.length && !containsBoundary(candidate, ctx)).pop();
+      if (!header) continue;
+      const head = cellsOf(header)[column];
+      const placeholders = placeholdersOf(control);
+      const text = cleanLabel(joinSegments(usefulSegments(textSegments(head, ctx, new Set()), placeholders)), placeholders);
+      return text ? { text, source: "table-header", labelEl: head, row } : null;
+    }
+    return null;
+  }
+
+  // #301 一题多框（简道云手机号带短信验证码、分开的省 / 市 / 区）：控件自己的表单项里没有题目时，往上（最多 4 层）
+  // 找装着这几个框的题目容器：只装 2–4 个文字框、没有别的控件，题目是排在所有框前面的 label / title 类元素，
+  // 框和框之间没有别的题目。每个框按 aria-label 或占位文字取子项，叫「题目 - 子项」。子项重复、或别的框没有子项，就不取。
+  // 排第一的框没有子项时，只在别的框都是验证码时把它当成这道题本身（手机号 + 短信验证码）；
+  // 区号框（+86）、证件类型旁的号码框这类，第一个框不是题目本身，叫成整道题会把手机号填进区号框。
+  const MAX_PART_BOXES = 4;
+  const MAX_PART_CHARS = 20;
+  const CODE_PART = /验证码|校验码|动态码|captcha|verif|sms|\botp\b/i;
+  function isTextBox(el) {
+    if (el.tagName === "TEXTAREA") return true;
+    const type = inputType(el);
+    return el.tagName === "INPUT" && !CHOICE_TYPES.has(type) && !DATE_TYPES.has(type) && type !== "file" && !hasComboSignal(el);
+  }
+
+  function partName(el) {
+    for (const value of [attr(el, "aria-label"), attr(el, "placeholder")]) {
+      const rest = squash(value).replace(/^(?:请(?:输入|选择|填写)|输入|选择|填写)/, "").replace(/[.。…:：]+$/, "").trim();
+      if (rest && rest.length <= MAX_PART_CHARS && !isNoiseText(value) && !isNoiseText(rest)) return rest;
+    }
+    return "";
+  }
+
+  function partLabel(control, item, ctx) {
+    if (!["text", "textarea"].includes(control.controlKind)) return null;
+    const boundaries = boundaryControls(ctx);
+    for (let scope = item.parentElement, depth = 0; scope && scope !== ctx.body && depth < 4; scope = scope.parentElement, depth += 1) {
+      const boxes = Array.from(scope.querySelectorAll(CONTROL_SELECTOR)).filter((el) => boundaries.has(el));
+      if (boxes.length > MAX_PART_BOXES || !boxes.every(isTextBox) || customRadioGroups(ctx).some(({ group }) => scope.contains(group))) return null;
+      if (boxes.length < 2) continue;
+      const segments = usefulSegments(textSegments(scope, ctx, new Set()), []);
+      const before = segments.filter((segment) => isBefore(segment.node, boxes[0]));
+      let title = null;
+      for (let index = before.length - 1; index >= 0 && !title; index -= 1) {
+        const labelEl = labelLikeAncestor(before[index].el, scope);
+        if (!labelEl || containsBoundary(labelEl, ctx)) continue;
+        const text = cleanLabel(joinSegments(before.filter((segment) => labelEl.contains(segment.node))), []);
+        if (text) title = { text, labelEl };
+      }
+      if (!title) continue;
+      // 题目在某个框自己的表单项里：那是这个框单独的题目，别的框是另一道题（只有占位文字的下一行）。
+      if (boxes.some((box) => findItem(box, ctx).contains(title.labelEl))) return null;
+      // 题目那一块里还有题目以外的字：是「应聘岗位 护士」这类只读的信息行（Vant 的 cell），不是这几个框的题目。
+      let block = title.labelEl;
+      while (block.parentElement && block.parentElement !== scope) block = block.parentElement;
+      if (segments.some((segment) => block.contains(segment.node) && !title.labelEl.contains(segment.node))) return null;
+      // 框和框之间又出现题目：是几道题挨在一起，不是一题多框。
+      const last = boxes[boxes.length - 1];
+      if (segments.some((segment) => isBefore(boxes[0], segment.node) && isBefore(segment.node, last) && labelLikeAncestor(segment.el, scope))) return null;
+      const names = boxes.map(partName);
+      const named = names.filter(Boolean);
+      if (new Set(named).size !== named.length || names.slice(1).some((name) => !name)) return null;
+      if (!names[0] && !names.slice(1).every((name) => CODE_PART.test(name))) return null;
+      const name = names[boxes.indexOf(control.element)];
+      return { text: name ? `${title.text} - ${name}` : title.text, source: "item-part", labelEl: title.labelEl, question: scope };
+    }
+    return null;
+  }
+
   // 控件和题目是同一层的兄弟：只看紧挨着的前文，碰到别的控件就停。
   function siblingLabel(control, item, ctx) {
     const placeholders = placeholdersOf(control);
@@ -734,13 +841,17 @@
     return explicitLabel(control, ctx)
       || itemLabel(control, item, ctx)
       || tableLabel(control, item, ctx)
+      || gridLabel(control, item, ctx)
       || siblingLabel(control, item, ctx)
+      || partLabel(control, item, ctx)
       || placeholderHint(control)
       || { text: "", source: "none", labelEl: null };
   }
 
   const STRONG_SOURCES = new Set(["explicit", "item", "table", "table-header"]);
   const OFFERABLE_SOURCES = new Set(["explicit", "item", "item-text", "table", "table-header", "sibling"]);
+  // #408 判断「控件一个都没读出来」时不算数的跳过原因：读出错，以及本来就不填的页头、站内搜索、表单外和文件框。
+  const UNREADABLE_REASONS = new Set(["scanError", "pageChrome", "siteSearch", "outsideForm", "file"]);
 
   // --- 区块与重复条目 ---------------------------------------------------------
 
@@ -749,7 +860,9 @@
   // 2) 标题行只有自动生成的 class（北森的 sc-xxxx）：只在“装着一组字段”的容器前面，
   //    取紧挨着的那几行纯文字里最上面一行——标题在上，说明文字在下。单个字段旁边的纯文字不算区块标题。
   function findSection(control, ctx, claimed) {
-    const start = control.item;
+    // 一题多框的框按整道题找区块：同一题里的另一个框不算别的字段。
+    const start = control.question || control.item;
+    const own = control.question || control.root;
     let depth = 0;
     for (let node = start; node && node !== ctx.body && node.tagName !== "HTML" && depth < 14; node = node.parentElement, depth += 1) {
       if (node.tagName === "FIELDSET" && node !== start) {
@@ -765,7 +878,7 @@
         const text = headingText(heading, ctx, control);
         if (text) return { text, root: node.parentElement };
       }
-      if (!hasForeignControl(node, control.root, ctx)) continue;
+      if (!hasForeignControl(node, own, ctx)) continue;
       const run = [];
       for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
         // 已经当了别的字段题目的（比如表头那一行）不是区块标题。
@@ -776,6 +889,14 @@
           break;
         }
         run.push(prev);
+        // 带字的分割线是这一块的开头，再往前的字属于上一块。只取它的题目（简道云的 .field-name / .sep-label），
+        // 不带下面的说明（#301 简道云没写题目的子表单前面是【工作经历】分割线，带一段长说明；
+        // 再往前是下面没有题的「规培经历」分割线，原来取最上面一行会归到「规培经历」）。
+        if (hasDivider(prev)) {
+          const title = [prev, ...prev.querySelectorAll("*")].find((el) => isLabelLike(el) && headingText(el, ctx, control));
+          const text = headingText(title || prev, ctx, control);
+          if (text) return { text, root: node.parentElement };
+        }
       }
       for (const candidate of run.reverse()) {
         const text = headingText(candidate, ctx, control);
@@ -788,6 +909,12 @@
   function sameShape(a, b) {
     const cls = attr(a, "class");
     return Boolean(cls) && a.tagName === b.tagName && cls === attr(b, "class");
+  }
+
+  // 分割线：<hr>，或类名以 separator / divider 结尾（简道云 .fx-form-separator、Element / antd 的 divider）。
+  const DIVIDER_TOKEN = /(?:^|[-_])(?:separator|divider)$/i;
+  function hasDivider(el) {
+    return [el, ...el.querySelectorAll("*")].some((node) => node.tagName === "HR" || classTokens(node).some((token) => DIVIDER_TOKEN.test(token)));
   }
 
   // 区块里有「添加」「新增」这类按钮：能加多条，是经历类列表。
@@ -831,28 +958,37 @@
 
   function scanPage(doc, options = {}) {
     const ctx = makeContext(doc, options);
-    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, ambiguous: 0 };
+    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, scanError: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
       .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el));
     skipped.popup = allControls.filter((el) => isPopupInternal(el, ctx)).length;
 
     const controls = collectLogicalControls(ctx);
     const itemByRoot = new Map();
+    // #408 逐项跳过时第一个出错的原因：交给 content.js 按代码异常上报，不进诊断。
+    let fault = null;
     for (const control of controls) {
       skipped.merged += control.merged || 0;
-      if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
-      control.item = itemByRoot.get(control.root);
-      const resolved = resolveLabel(control, control.item, ctx);
-      control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
-      control.labelSource = resolved.source;
-      control.labelEl = resolved.labelEl;
-      control.tableRow = resolved.row || null;
-      control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
-      control.chrome = isPageChrome(control.root);
-      // 禁用的控件和文件框只用来划分表单项边界，不填写。
-      const disabled = control.elements.every((el) => el.disabled);
-      control.fillable = control.controlKind !== "file" && !disabled && control.labelSource !== "none";
-      control.skipReason = control.controlKind === "file" ? "file" : disabled ? "disabled" : control.labelSource === "none" ? "noLabel" : "";
+      try {
+        if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
+        control.item = itemByRoot.get(control.root);
+        const resolved = resolveLabel(control, control.item, ctx);
+        control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
+        control.labelSource = resolved.source;
+        control.labelEl = resolved.labelEl;
+        control.tableRow = resolved.row || null;
+        control.question = resolved.question || null;
+        control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
+        control.chrome = isPageChrome(control.root);
+        // 禁用的控件和文件框只用来划分表单项边界，不填写。
+        const disabled = control.elements.every((el) => el.disabled);
+        control.fillable = control.controlKind !== "file" && !disabled && control.labelSource !== "none";
+        control.skipReason = control.controlKind === "file" ? "file" : disabled ? "disabled" : control.labelSource === "none" ? "noLabel" : "";
+      } catch (error) {
+        // #408 读这一项的题目时出错：只跳过它并计数，别的照常扫描。
+        if (!fault) fault = error;
+        Object.assign(control, { fillable: false, skipReason: "scanError", labelEl: null });
+      }
     }
 
     for (const control of controls) {
@@ -880,13 +1016,26 @@
       if (control.skipReason && skipped[control.skipReason] !== undefined) skipped[control.skipReason] += 1;
     });
 
-    const kept = controls.filter((control) => control.fillable);
-    const claimed = new Set(kept.map((control) => control.labelEl).filter(Boolean));
-    kept.forEach((control) => {
-      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
-      control.section = found.text;
-      control.sectionRoot = found.root;
+    const claimed = new Set(controls.filter((control) => control.fillable).map((control) => control.labelEl).filter(Boolean));
+    controls.forEach((control) => {
+      if (!control.fillable) return;
+      try {
+        const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+        control.section = found.text;
+        control.sectionRoot = found.root;
+      } catch (error) {
+        // #408 找这一项所属区块时出错：同样只跳过它。题目已经读出来了，留在 claimed 里，别的项不会拿它当区块标题。
+        if (!fault) fault = error;
+        control.fillable = false;
+        control.skipReason = "scanError";
+        skipped.scanError += 1;
+      }
     });
+    const kept = controls.filter((control) => control.fillable);
+    // #408 控件一个都没读出来：出错的之外，只剩页头导航、站内搜索、表单外的控件和文件框（这些本来就不填）。
+    // 有读出来、只是禁用或对不上题目的控件时不算，没填的原因在它们身上。
+    const unreadable = Boolean(fault) && !kept.length
+      && controls.every((control) => UNREADABLE_REASONS.has(control.skipReason));
 
     // 同一区块里同名的题目（重复条目、表格多行）按页面顺序编号。
     const sameSlot = new Map();
@@ -944,7 +1093,9 @@
     return {
       controls: kept.map(publicControl),
       skipped,
-      sources
+      sources,
+      fault,
+      unreadable
     };
   }
 
@@ -1051,23 +1202,34 @@
   // root 是 Document 或开放的 ShadowRoot。
   function outlineControls(root, options = {}) {
     const ctx = makeContext(root, options);
-    const controls = collectLogicalControls(ctx);
     const itemByRoot = new Map();
-    for (const control of controls) {
-      if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
-      control.item = itemByRoot.get(control.root);
-      const resolved = resolveLabel(control, control.item, ctx);
-      control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
-      control.labelSource = resolved.source;
-      control.labelEl = resolved.labelEl;
-      control.disabled = control.elements.every((el) => el.disabled);
-      control.chrome = isPageChrome(control.root);
-      control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
-    }
+    // #408 和 scanPage 一样：哪一项读不出来就不列这一项，大纲照常生成。
+    const controls = collectLogicalControls(ctx).filter((control) => {
+      try {
+        if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
+        control.item = itemByRoot.get(control.root);
+        const resolved = resolveLabel(control, control.item, ctx);
+        control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
+        control.labelSource = resolved.source;
+        control.labelEl = resolved.labelEl;
+        control.question = resolved.question || null;
+        control.disabled = control.elements.every((el) => el.disabled);
+        control.chrome = isPageChrome(control.root);
+        control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     const claimed = new Set(controls.map((control) => control.labelEl).filter(Boolean));
-    return controls.map((control) => {
-      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
-      return {
+    return controls.flatMap((control) => {
+      let found;
+      try {
+        found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+      } catch {
+        return [];
+      }
+      return [{
         kind: control.kind,
         controlKind: control.controlKind,
         element: control.element,
@@ -1084,7 +1246,7 @@
         rangePart: control.rangePart || "",
         mixed: Boolean(control.mixed),
         placeholder: attr(control.element, "placeholder")
-      };
+      }];
     });
   }
 
