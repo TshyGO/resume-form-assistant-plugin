@@ -108,7 +108,8 @@
   }
   // 按下、松开，不派发 click：网页可能把点了外面当成要保存。
   function press(target) {
-    const View = target.ownerDocument.defaultView;
+    const View = target?.ownerDocument?.defaultView;
+    if (!View) return;
     for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
       if (Event) target.dispatchEvent(new Event(type, { bubbles: true }));
     }
@@ -197,7 +198,7 @@
       // #301 #417 element-ui 2.15 选中的叶子：is-active，前面多一个勾（el-cascader-node__prefix），没有 aria-checked。只有 is-active 不算。
       const checked = leaf?.isConnected && (leaf.getAttribute('aria-checked') === 'true'
         || leaf.classList.contains('is-checked') || Boolean(leaf.querySelector('input[type="radio"]:checked, .el-radio.is-checked'))
-        || (leaf.classList.contains('is-active') && Boolean(leaf.querySelector(':scope > .el-cascader-node__prefix'))));
+        || (leaf.classList.contains('is-active') && Boolean(leaf.querySelector(':scope > .el-icon-check.el-cascader-node__prefix'))));
       if (!checked) return [];
     }
     if (selector) {
@@ -1156,6 +1157,8 @@
     if (outer.length !== 1) return;
     const layer = outer[0], gone = () => !layer.isConnected || !h.visible(layer);
     const dialog = dialogOf(el);
+    // 聚焦之前页面上就开着别的对话框、又不装着这个框：Esc 可能关掉它，在页面上按也可能算点了它外面，都不做。
+    if (!dialog && Array.from(before).some(node => node.isConnected && h.visible(node) && node.matches(DIALOGS) && !node.contains(el))) return;
     if (dialog) {
       // 浮层就画在框旁边（和框在同一个组件里）时，在装着两者的那一层外面按，组件才算点了外面。
       let near = el;

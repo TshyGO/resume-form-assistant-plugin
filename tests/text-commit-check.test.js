@@ -617,6 +617,25 @@ test("a readonly box that the page empties without any picker is reported the sa
   assert.deepEqual([dialog.counts.escapes, presses], [0, 0]);
 });
 
+// 页面上本来就开着另一个对话框（不装着这个框）：Esc 可能把它关掉，不按 Esc、也不在页面上按，聚焦时打开的那一块留着。
+test("a readonly box outside a dialog that was already open sends no Esc and presses nothing", async (t) => {
+  const p = page(t, item("major", "专业", "readonly"), [["专业", "计算机科学与技术"]]);
+  const other = p.doc.createElement("div");
+  other.setAttribute("role", "dialog");
+  other.className = "notice-dialog";
+  other.innerHTML = "<span>请先阅读报名须知</span>";
+  p.doc.body.append(other);
+  const dialog = pickerDialog(p);
+  p.input("major").addEventListener("focus", dialog.open);
+  controlled(p.input("major"), { onInput: () => "" });
+  let presses = 0;
+  p.doc.addEventListener("mousedown", () => { presses += 1; });
+  assert.equal(await p.set("major", "计算机科学与技术"), false);
+  assert.equal(p.reason("major"), "readonly_picker");
+  assert.deepEqual([dialog.counts.escapes, presses], [0, 0]);
+  assert.equal(other.isConnected, true);
+});
+
 test("a readonly box inside a dialog never presses Esc: a press beside it closes the layer it opened", async (t) => {
   // 表单本身在对话框里：Esc 会把这层对话框也关掉，里面没保存的内容就没了。
   // 浮层挂在 body 下（el-popover 一类），或者就画在框旁边、和框同在一个组件里（自制选择器），都是在组件外面按下就收。

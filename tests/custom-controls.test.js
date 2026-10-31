@@ -416,6 +416,12 @@ test('a searchable Element UI 2 cascader counts its checked leaf as the selectio
 test('a searchable Element cascader leaf marked active without the check is not a selection', async () => {
   const h = elementCascader((leaf, popup, h) => { leaf.classList.add('is-active'); h.el.value = '上海市 / 浦东新区'; popup.hidden = true; });
   assert.equal((await h.api.operate(h.target, '上海市 / 浦东新区')).reason, 'selection_not_committed');
+  // 前面只有一个空的占位、不是那个勾（el-icon-check）的，也不算。
+  const empty = elementCascader((leaf, popup, h) => {
+    leaf.classList.add('is-active'); leaf.insertAdjacentHTML('afterbegin', '<span class="el-cascader-node__prefix"></span>');
+    h.el.value = '上海市 / 浦东新区'; popup.hidden = true;
+  });
+  assert.equal((await empty.api.operate(empty.target, '上海市 / 浦东新区')).reason, 'selection_not_committed');
 });
 
 test('cascade child wait follows a remounted owned popup and its busy state',async()=>{
