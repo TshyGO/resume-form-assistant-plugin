@@ -2777,7 +2777,7 @@
           const ready = new Set(local.filter(match => {
             const entry = fieldMap.get(match.fieldId);
             return entry && isFieldBindingCurrent(entry) && !hasExistingValue(entry)
-              && !(entry.kind === "element" && entry.element instanceof HTMLSelectElement && !hasRealSelectOptions(entry.element));
+              && !(entry.kind === "element" && isSelectElement(entry.element) && !hasRealSelectOptions(entry.element));
           }).map(match => match.fieldId));
           // 联动下拉从上往下：上一级没先填，下面几级也不先填。
           const groups = new Map();
@@ -4909,7 +4909,7 @@
   }
 
   function isDateLikeText(element) {
-    if (!(element instanceof HTMLInputElement) || !isTextControl(element)) {
+    if (!isInputElement(element) || !isTextControl(element)) {
       return false;
     }
     return Boolean(datePlaceholderFormat(element)) || DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`);
@@ -5035,7 +5035,7 @@
   // inputmode 只是给手机键盘的提示，很多框什么都收：先照原样写，numeric 是页面没收下时改写的数字（取不出是 null）。
   function prepareTextValue(element, value) {
     const text = String(value ?? "");
-    if (!(element instanceof HTMLInputElement)) {
+    if (!isInputElement(element)) {
       return { value: text };
     }
     const format = datePlaceholderFormat(element);
@@ -5200,7 +5200,7 @@
   function watchOverlays(control) {
     const visibleOverlays = () => {
       try {
-        return Array.from(document.querySelectorAll(OVERLAY_SELECTOR))
+        return Array.from(docOf(control).querySelectorAll(OVERLAY_SELECTOR))
           .filter((node) => !node.contains(control) && !node.closest(`#${SIDEBAR_ID}`) && isVisible(node));
       } catch {
         return [];
@@ -5233,7 +5233,7 @@
       observer = new MutationObserver(() => {
         if (pending === null) pending = window.setTimeout(() => { pending = null; if (!done && look()) stop(); }, 30);
       });
-      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden"] });
+      observer.observe(docOf(control).documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden"] });
     } catch {
       // 没有 MutationObserver 时只在结束时看一次。
     }
@@ -5246,14 +5246,14 @@
     const control = target?.kind === 'element' ? target.element : target;
     // 文本框才看弹层；不等文字提交时（测试）不看。
     overlayWatch?.stop(true);
-    overlayWatch = fill && textCommitWaitMs > 0 && control instanceof HTMLElement && !target?.pickerType
+    overlayWatch = fill && textCommitWaitMs > 0 && isHtmlElement(control) && !target?.pickerType
       && !["custom-select", "cascader", "date", "date-picker"].includes(target?.controlKind) && isTextControl(control) ? watchOverlays(control) : null;
     const watch = overlayWatch;
     // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
     if (watch) overlayWatches.set(control, watch);
     else if (control && typeof control === 'object') overlayWatches.delete(control);
     let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
-    if (result.ok && watch && control instanceof HTMLInputElement && await calendarKeptOpen(watch, control, value)) {
+    if (result.ok && watch && isInputElement(control) && await calendarKeptOpen(watch, control, value)) {
       result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
     }
     if (control && typeof control === 'object') {
