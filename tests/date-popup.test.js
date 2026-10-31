@@ -97,6 +97,39 @@ test("ant-design-vue 1.x: a date in the month the calendar already shows still w
   assert.equal(h.field.value, "2026-10-15");
 });
 
+// 页面很忙，日历过了等待上限（约 0.3 秒）还没接住打的字：这时回车交出的是日历原来指着的日子，不回车，改在日历里逐级点。
+test("ant-design-vue 1.x: a calendar that has not taken the typed date by the end of the wait gets no Enter", async () => {
+  const h = antCalendar({ lag: 450 });
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+  assert.deepEqual(h.enters, [], "没有回车");
+});
+
+// 英文标题（Oct 2026）认不出年月、日历又过一拍才接住打的字：不马上回车，等日历上的字变了（换成 May 2026、选中 12 日）再回车。
+test("ant-design-vue 1.x with a header the plugin cannot read still waits for the calendar before Enter", async () => {
+  for (const date of ["2026-05-12", "2002-05-12"]) {
+    const h = antCalendar({ lag: 40, english: true });
+    const result = await h.api.operate(h.target, date);
+    assert.equal(result.ok, true, `${date}: ${JSON.stringify(result)}`);
+    assert.equal(h.field.value, date);
+    assert.deepEqual(h.enters, [date]);
+  }
+});
+
+// 网页把所有弹层都放进一个一直在、自己有大小、浮在页面上的空外壳里：点开前记浮层时不算它，里面新画的日历照样认。
+test("a calendar drawn into an empty floating container that is always there is still the field's own", async () => {
+  const h = antCalendar({ lag: 0 });
+  const host = h.doc.createElement("div");
+  host.className = "app-popup-container";
+  host.style.position = "absolute";
+  h.doc.body.append(host);
+  h.doc.body.append = (node) => host.append(node);
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+});
+
 test("antd 3 (React) takes the typed date at once and is not slowed down", async () => {
   const h = antCalendar({ lag: null });
   const result = await h.api.operate(h.target, "2002-05-12");
@@ -107,8 +140,8 @@ test("antd 3 (React) takes the typed date at once and is not slowed down", async
 });
 
 test("a calendar that commits another date on Enter is reported as having changed the field, not as merely not chosen", async () => {
-  // 标题认不出（Oct 2026），日历又过 100ms 才收下打的字：回车交出的是今天。
-  const h = antCalendar({ lag: 100, english: true });
+  // 标题认不出（Oct 2026），日历过 0.5 秒才收下打的字，等满了也没变：只好回车，回车交出的是今天。
+  const h = antCalendar({ lag: 500, english: true });
   const result = await h.api.operate(h.target, "2002-05-12");
   assert.equal(result.ok, false);
   assert.equal(result.reason, "selection_not_committed");
@@ -502,7 +535,7 @@ test("the fill report and the side panel say a date picker left another date in 
     if (layer) return;
     layer = doc.createElement("div");
     layer.innerHTML = `<div class="ant-calendar-picker-container"><div class="ant-calendar"><div class="ant-calendar-input-wrap"><input class="ant-calendar-input" value=""></div>
-      <div class="ant-calendar-header"><a class="ant-calendar-month-select">Oct</a> <a class="ant-calendar-year-select">2026</a></div>
+      <div class="ant-calendar-header"><span class="ant-calendar-my-select">Oct 2026</span></div>
       <table><tbody><tr>${Array.from({ length: 31 }, (_, i) => `<td><div class="ant-calendar-date">${i + 1}</div></td>`).join("")}</tr></tbody></table></div></div>`;
     layer.querySelector("input").addEventListener("keydown", (event) => { if (event.key === "Enter") { field.value = "2026-10-22"; layer.remove(); layer = null; } });
     doc.body.append(layer);

@@ -228,7 +228,8 @@
     return all.filter(node => !all.some(other => other !== node && other.contains(node)));
   }
   // #301 点开之前就看得见的浮层：上一个下拉、联想框、日历没收起或正在退场的那一块（#417 智联、hotjob）。
-  // 下一个控件认弹层时跳过它们（见 staleLayer）。组件库的弹层外壳按类名认；别的按类名里的词认，并且自己浮在页面上。
+  // 下一个控件认弹层时跳过它们（见 staleLayer）。组件库的弹层外壳按类名认；别的按类名里的词认，并且自己浮在页面上、里面有字
+  // （网页放所有弹层的空外壳不算，不然里面新画的弹层也会被跳过）。
   const FLOATING = '.el-popper, .el-picker-panel, .el-autocomplete-suggestion, .ant-calendar-picker-container, .ant-cascader-menus, .ant-picker-dropdown';
   const FLOATING_WORDS = ['popper', 'popover', 'popup', 'dropdown', 'picker-panel', 'suggest', 'calendar', 'datepicker', 'date-picker']
     .map(word => `[class*="${word}" i]`).join(', ');
@@ -236,7 +237,7 @@
     const View = doc.defaultView;
     const floating = node => ['absolute', 'fixed'].includes(View?.getComputedStyle(node).position);
     return new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(FLOATING)).filter(visible),
-      ...Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => visible(node) && floating(node))]);
+      ...Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => trim(node.textContent) && visible(node) && floating(node))]);
   }
   // 被点开前就开着的浮层装着、或装着它的一块不是这次点开的。装着这个控件的不算：页面上常驻的大块 listbox、tree。
   function staleLayer(node, info) {
@@ -582,6 +583,8 @@
       picked: cells(dayOf, el => !otherMonth(el) && pickedCell(el)).map(cell => cell.value),
       headYear: headYear ? yearOf(headYear.textContent) : 0, headYearNode: headYear || null,
       headMonth: headMonth ? monthOf(headMonth.textContent) : 0, headMonthNode: headMonth || null,
+      // 格子以外的字（标题、按钮）：年月认不出时，拿它看日历有没有动。
+      head: leaves.filter(el => !inCell(el)).map(el => trim(el.textContent)).join('|'),
       button: (level, dir) => buttons.find(button => button.level === level && button.dir === dir)?.el || null,
       input
     };
@@ -663,28 +666,35 @@
     };
     // 1. 日历自带的日期框：按它现有的格式输入，等日历跟上再回车。ant-design-vue 1.x（Vue 2，#418 南航）过一拍
     // 才把框里的字交给日历，同一拍回车交出的是日历原来的日子（没选过是今天）。让一拍，再等日历跟上，最多约 0.3 秒：
-    // 标题是要填的年月，标成选中的是要填的那天；没有标成选中的日子，就等标题和打字前不一样（要填的正是日历显示的这个月时等满）。
-    // 标题认不出、也没有选中的日子，过一拍就回车。
+    // 标题是要填的年月，标成选中的是要填的那天；没有标成选中的日子，就等日历上的字（标题、按钮）和打字前不一样，
+    // 标题认不出（英文 Oct 2026）的也这样等。
     if (mode === 'date' && view.input) {
       const input = view.input, sep = input.value.includes('/') ? '/' : '-';
       const reason = h.stop(ctx, true); if (reason) return { reason };
-      const face = seen => `${seen.headYear}-${seen.headMonth}|${seen.picked.join(',')}`, untyped = face(view);
+      const face = seen => `${seen.head}|${seen.picked.join(',')}`, untyped = face(view);
       h.write(input, [want.y, pad2(want.m), pad2(want.d)].join(sep), ctx); h.input(input);
       await new Promise(resolve => setTimeout(resolve, 0));
       const caughtUp = seen => {
         if (!seen) return true;
         if ((seen.headYear && seen.headYear !== want.y) || (seen.headMonth && seen.headMonth !== want.m)) return false;
         if (seen.picked.length) return seen.picked.includes(want.d);
-        return !(seen.headYear && seen.headMonth) || face(seen) !== untyped;
+        return face(seen) !== untyped;
       };
-      const caught = await h.waitUntil(ctx, doc.documentElement, () => current() && calendarView(layer, h), caughtUp, TYPED_DATE_MS);
+      // 只有 antd 3 / ant-design-vue 1.x 的日历（.ant-calendar-input）自己接打的字；北森、Element 这类要回车才收，不等，过一拍就回车。
+      const followsTyping = input.classList.contains('ant-calendar-input');
+      const caught = followsTyping ? await h.waitUntil(ctx, doc.documentElement, () => current() && calendarView(layer, h), caughtUp, TYPED_DATE_MS) : {};
       if (caught.reason && caught.reason !== 'verification_timeout') return { reason: caught.reason };
       const stopped = h.stop(ctx, true); if (stopped) return { reason: stopped };
-      const View = doc.defaultView;
-      if (input.isConnected) for (const type of ['keydown', 'keypress', 'keyup']) input.dispatchEvent(new View.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      const typed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 600);
-      if (!typed.reason) return { accepted, dayDefaulted };
-      if (typed.reason !== 'verification_timeout') return { reason: typed.reason };
+      // 等满了日历还没跟上（页面很忙）：看得出它还指着别的年月、别的日子时，回车交出的就是那一天，不回车，下面逐级点。
+      // 标题认不出、也没有选中日子的，看不出指着哪天，等满后照旧回车。
+      const still = caught.reason ? current() && calendarView(layer, h) : null;
+      if (!caught.reason || !(still && ((still.headYear && still.headMonth) || still.picked.length))) {
+        const View = doc.defaultView;
+        if (input.isConnected) for (const type of ['keydown', 'keypress', 'keyup']) input.dispatchEvent(new View.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        const typed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 600);
+        if (!typed.reason) return { accepted, dayDefaulted };
+        if (typed.reason !== 'verification_timeout') return { reason: typed.reason };
+      }
       if (!current()) return missed();
     }
     // 2. 逐级点：日期表 → 年份标题 → 年份表 → 月份表 → 日期表。
