@@ -130,6 +130,17 @@ test("Beisen constant selector still loading, with the current choice listed in 
   assert.equal(run.result.filledCount, 1);
 });
 
+test("Beisen school name searched on the server, opened before its dictionary has loaded: the school is picked", async (t) => {
+  // #301 kotei.zhiye.com：学校名称是两级字典，搜索交给后台。原来结果回来之前就报「没有匹配的选项」；
+  // 结果回来后又点了文字、没点单选圈，报「选项选择未提交」。
+  const run = await choose(t, "学校名称", "示例大学", { tree: { 北京市: ["北京示例学院", "首都示例大学"], 湖北省: ["示例大学", "江汉示例学院"] },
+    loadMs: 600, searchMs: 300 });
+  assert.equal(run.shown(), "示例大学", run.diag);
+  assert.deepEqual(run.events, ["radio:示例大学", "ok"]);
+  assert.deepEqual(run.searches, ["示例大学"]);
+  assert.equal(run.result.filledCount, 1);
+});
+
 test("textless elements named lazyloading or loading-done are not a loading list, so the search still finishes", async (t) => {
   // 加载图标只认类名以 loading 结尾、不带文字的（psd_page-loading）。一直留在弹层里的懒加载图片、
   // 「加载完成」标记当成加载中，搜索后就一直等不到列表好。

@@ -49,7 +49,8 @@
   // 不靠类名认弹层：点开后看页面上新冒出来、贴着这个控件的那一块；选项是里面只含一段短文字的条目；
   // 选完读组件上显示的文字核验。拿不准（两块并存、没有匹配、被回滚）一律不选或不算成功。
   const ARIA_SIGNALS = '[role="combobox"], [aria-haspopup]:not([aria-haspopup="false"]), [aria-controls], [aria-owns], [aria-autocomplete]';
-  const GENERIC_EMPTY = /^(?:暂无数据|无匹配数据|没有数据|无数据|加载中|搜索中|no data|no results?|loading)/i;
+  // 北森的空列表写「这里什么都没有...」。
+  const GENERIC_EMPTY = /^(?:暂无数据|无匹配数据|没有数据|无数据|这里什么都没有|暂无搜索结果|加载中|搜索中|no data|no results?|loading)/i;
   const GENERIC_LOADING = /^(?:加载中|搜索中|loading)/i;
   // 弹层里的操作文字（北森「勾选 + 确定」式底部按钮、已选计数）不是选项。
   const GENERIC_ACTION = /^(?:确定|确认|完成|取消|关闭|清空|清空已选|重置|全选|已选\s*\d+\s*\/\s*\d+|ok|cancel|confirm|done|clear|reset)$/i;
@@ -57,6 +58,8 @@
   // 北森「勾选 + 确定」式弹层里列表周围的字：左侧的「全部」面包屑，右侧拆成几段的「已选 0/1」计数，没选时的「请在左侧选择内容」。
   const GENERIC_COUNTER = /^已选\s*\d+\s*\/\s*\d+$/;
   const GENERIC_PROMPT = /^请(?:在|从)左(?:侧|边)选择/;
+  // 搜索时列表上面的「搜索结果3个」。后台搜索（北森学校名称）的结果回来之前是「搜索结果0个」。
+  const GENERIC_RESULT_COUNT = /^搜索结果\s*\d+\s*个$/;
   const BREADCRUMB_CLASS = /breadcrumb/i;
   // 加载图标：类名以 loading 结尾（北森 psd_page-loading），自己不带文字。lazyloading、loading-done 不算。
   const LOADING_TOKEN = /(?:^|[-_])loading$/i;
@@ -64,6 +67,8 @@
   const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
   // 通用路径交还前等自己的弹层退场的上限。
   const POPUP_LEAVE_MS = 1000;
+  // 通用路径点开后弹层里一直显示加载图标：第一轮等选项最多等到平常的这么多倍（正式 8 秒）。
+  const GENERIC_LOADING_WAITS = 4;
   // 失败收尾按了 Esc 以后等弹层退场的上限，过了还在才在页面空白处按一下。
   const ESC_LEAVE_MS = 600;
   // #301 对话框、抽屉、模态层。控件在这里面时失败收尾不按 Esc：它会冒泡到对话框（AntD Modal 在外层的 keydown 上关，
@@ -294,7 +299,7 @@
       const [first, ...rest] = full.split(/\s*\/\s*/);
       const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
       const disabled = node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled(?:$|[-_])/i.test(String(node.className || ''));
-      return { node, target: clickTarget(node, hasText), text: primary, value: full, full, disabled };
+      return { node, target: clickTarget(node, hasText, items, popup), text: primary, value: full, full, disabled };
     }).filter(option => !GENERIC_EMPTY.test(option.full) && !GENERIC_ACTION.test(option.full)
       && !option.node.closest('button, [role="button"], [class*="footer" i]'));
   }
@@ -312,11 +317,14 @@
   // 点哪里：条目带单选圈、勾选框时点它（北森「勾选 + 确定」式选择框只认圆圈，点文字不算选中）；
   // 否则点文字所在的最里层，事件向外冒泡，网站把点击处理挂在哪一层都收得到。
   const MARK_CLASS = /radio|checkbox|check-?box|checked|unchecked/i;
-  function clickTarget(node, hasText) {
+  const MARK_INPUTS = 'input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]';
+  // items、popup：通用路径弹层里的全部条目和弹层，给了才在条目旁边找（见 markBeside）。
+  function clickTarget(node, hasText, items, popup) {
     const marks = Array.from(node.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], [class]'))
       .filter(el => el.matches('input, [role="radio"], [role="checkbox"]') || (!hasText(el) && MARK_CLASS.test(String(el.getAttribute('class') || ''))));
     const outer = marks.filter(el => !marks.some(other => other !== el && other.contains(el)));
     if (outer.length === 1) return outer[0];
+    if (!outer.length && items) { const mark = markBeside(node, hasText, items, popup); if (mark) return mark; }
     let target = node;
     for (let inner = target.firstElementChild; inner; inner = target.firstElementChild) {
       const texty = Array.from(target.children).filter(hasText);
@@ -324,6 +332,20 @@
       target = texty[0];
     }
     return target;
+  }
+  // #301 条目里没有单选圈：北森两级字典的搜索结果在名字后面多一行上级名称（item-text-fullname），条目只取到名字那层，圈在旁边。
+  // 往上最多两层、不到弹层，只在不带字的旁支（图标）里找单选、勾选框，正好一个才点，有几个就不猜。
+  // 这一层里前面还有别的条目时，圈算前面那一项的：上级名称那行正好是要填的值时，不能点了学校的圈。
+  function markBeside(node, hasText, items, popup) {
+    for (let up = node.parentElement, depth = 0; up && up !== popup && depth < 2; up = up.parentElement, depth += 1) {
+      if (items.some(other => other !== node && up.contains(other) && (other.compareDocumentPosition(node) & 4))) return null;
+      const marks = Array.from(up.children).filter(child => !child.contains(node) && !hasText(child))
+        .flatMap(child => [child, ...child.querySelectorAll('*')])
+        .filter(el => el.matches(MARK_INPUTS) || MARK_CLASS.test(String(el.getAttribute('class') || '')));
+      const outer = marks.filter(el => !marks.some(other => other !== el && other.contains(el)));
+      if (outer.length) return outer.length === 1 ? outer[0] : null;
+    }
+    return null;
   }
   // 选择框底部的「确定」：弹层里只有一个看得见的这类按钮时才点；表单的提交、跳转由 click 自己拦下。
   const CONFIRM_TEXT = /^(?:确定|确认|完成|ok|confirm|done)$/i;
@@ -374,7 +396,7 @@
   // 列表周围的字（见 GENERIC_COUNTER）认弹层时照样算上：左侧还在加载时，点开后只看得到右侧这一栏。
   // 比对和诊断里的「有没有选项」不算它们，免得空列表算成有选项、和同名的真选项撞成歧义。
   function layerWord(option, popup) {
-    if (GENERIC_PROMPT.test(option.full)) return true;
+    if (GENERIC_PROMPT.test(option.full) || GENERIC_RESULT_COUNT.test(option.full)) return true;
     // 列表为空时左侧一栏只剩面包屑，条目往上合并会把它整个装进来：条目里的字全是面包屑的也算。
     const crumb = option.node.querySelector('[class*="breadcrumb" i]');
     if (crumb && trim(crumb.textContent) === option.full) return true;
@@ -894,9 +916,20 @@
       const partial = current => partialList(current, popup, ctx.popup);
       // 联想框只选同名的一项（见 sameOption）：网页先给出的建议里没有，就打字再找；打字后还没有，交宿主按文本框写。
       const pick = items => info.freeText ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers, partial(items));
-      let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level),
-        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list) || typedSettled(steadySince)))
-          || (eagerSearch && list.length === 0) || (typedAntd && noSuggestions(list)));
+      const listReady = list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list) || typedSettled(steadySince)))
+        || (eagerSearch && list.length === 0) || (typedAntd && noSuggestions(list));
+      const waitedFrom = Date.now();
+      let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level), listReady);
+      // 通用路径等到点时还显示着加载图标（#301 北森字典大、网络慢）：接着等，见 GENERIC_LOADING_WAITS。
+      // 还在加载就不去搜索，按等待选项超时报。
+      if (generic && ready.reason === 'verification_timeout' && loading()) {
+        const rest = (h.timeoutMs ?? 2000) * GENERIC_LOADING_WAITS - (Date.now() - waitedFrom);
+        ready = await h.waitUntil(ctx, doc.documentElement, watchOptions, listReady, Math.max(0, rest));
+        if (ready.reason === 'verification_timeout' && loading()) {
+          if (level === 0 && !searchDone) ctx.observed.hasOptions = readOptions(level).length > 0;
+          return { reason: 'options_timeout' };
+        }
+      }
       if (ready.reason === 'verification_timeout' && (generic && (searchable && !searchDone || lastSeen) || typedAntd && lastSeen)) ready = { value: readOptions(level) };
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
