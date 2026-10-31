@@ -1088,7 +1088,10 @@ test("a radio beside the row is clicked only for the row's own name, never for t
   const mixed = `<div class="row"><div class="cell"><span class="label">其他类别</span><svg class="arrow"></svg></div>`
     + `<div class="cell"><span class="icon"><svg class="RadioUnchecked" data-name="示例类别"></svg></span><span class="label">示例类别</span></div></div>`
     + `<div class="row"><div class="cell"><span class="label">第三类别</span></div></div>`;
-  for (const [html, wanted] of [[school("江汉示例学院", "湖北省") + school("北京示例学院", "北京市"), "湖北省"], [mixed, "其他类别"]]) {
+  // 圈在条目后面、后面紧跟着另一个条目：圈是后面那一项的，前面没有圈的条目不借。
+  const flat = `<div class="row"><span class="label">其他类别</span><svg class="RadioUnchecked" data-name="示例类别"></svg><span class="label">示例类别</span></div>`
+    + `<div class="row"><span class="label">第三类别</span></div>`;
+  for (const [html, wanted] of [[school("江汉示例学院", "湖北省") + school("北京示例学院", "北京市"), "湖北省"], [mixed, "其他类别"], [flat, "其他类别"]]) {
     const h = rowsLayer("学校名称", `<div class="list">${html}</div>`);
     const result = await h.api.operate(h.target, wanted);
     assert.equal(result.ok, false);
@@ -1105,6 +1108,16 @@ test("a Beisen dictionary still loading after the usual wait is waited for longe
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.events, ["radio:回族", "ok"]);
   assert.deepEqual(h.searches, []);
+});
+
+// 弹层里一直留着一个不带字的加载图标（列表底部的懒加载标记），列表已经在了：不延长等待，照常从列表里选。
+test("a list already shown next to a loading mark that never goes away is still picked from", async () => {
+  const h = constantSelector("民族", { choices: ETHNIC, extra: `<div class="list-bottom-loading"></div>` }, { timeoutMs: 300 });
+  const started = Date.now();
+  const result = await h.api.operate(h.target, "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.events, ["radio:回族", "ok"]);
+  assert.ok(Date.now() - started < 1100, `waited ${Date.now() - started}ms`);
 });
 
 test("a Beisen dictionary that never finishes loading times out without typing into its search box", async () => {

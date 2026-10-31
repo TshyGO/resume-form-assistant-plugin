@@ -287,6 +287,8 @@
       && trim(node.textContent).length <= 40
       && !node.closest('input, textarea, select, button[type="submit"]'));
     const items = marked.slice();
+    // 弹层里根本没有单选圈、勾选框时，不去条目旁边找（见 markBeside），大列表每次读都要扫一遍。
+    const beside = Boolean(popup.querySelector(`${MARK_INPUTS}, [class*="radio" i], [class*="check" i]`)) ? items : null;
     for (const leaf of leaves) {
       let item = leaf;
       while (item.parentElement && item.parentElement !== popup
@@ -299,7 +301,7 @@
       const [first, ...rest] = full.split(/\s*\/\s*/);
       const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
       const disabled = node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled(?:$|[-_])/i.test(String(node.className || ''));
-      return { node, target: clickTarget(node, hasText, items, popup), text: primary, value: full, full, disabled };
+      return { node, target: clickTarget(node, hasText, beside, popup), text: primary, value: full, full, disabled };
     }).filter(option => !GENERIC_EMPTY.test(option.full) && !GENERIC_ACTION.test(option.full)
       && !option.node.closest('button, [role="button"], [class*="footer" i]'));
   }
@@ -336,12 +338,16 @@
   // #301 条目里没有单选圈：北森两级字典的搜索结果在名字后面多一行上级名称（item-text-fullname），条目只取到名字那层，圈在旁边。
   // 往上最多两层、不到弹层，只在不带字的旁支（图标）里找单选、勾选框，正好一个才点，有几个就不猜。
   // 这一层里前面还有别的条目时，圈算前面那一项的：上级名称那行正好是要填的值时，不能点了学校的圈。
+  // 圈在条目后面、圈后面还有别的条目时，圈算后面那一项的（圈多半在自己的名字前面），也不借。
   function markBeside(node, hasText, items, popup) {
+    const follows = (a, b) => Boolean(a.compareDocumentPosition(b) & 4);
     for (let up = node.parentElement, depth = 0; up && up !== popup && depth < 2; up = up.parentElement, depth += 1) {
-      if (items.some(other => other !== node && up.contains(other) && (other.compareDocumentPosition(node) & 4))) return null;
+      const others = items.filter(other => other !== node && up.contains(other));
+      if (others.some(other => follows(other, node))) return null;
       const marks = Array.from(up.children).filter(child => !child.contains(node) && !hasText(child))
         .flatMap(child => [child, ...child.querySelectorAll('*')])
-        .filter(el => el.matches(MARK_INPUTS) || MARK_CLASS.test(String(el.getAttribute('class') || '')));
+        .filter(el => el.matches(MARK_INPUTS) || MARK_CLASS.test(String(el.getAttribute('class') || '')))
+        .filter(el => !(follows(node, el) && others.some(other => follows(el, other))));
       const outer = marks.filter(el => !marks.some(other => other !== el && other.contains(el)));
       if (outer.length) return outer.length === 1 ? outer[0] : null;
     }
@@ -922,12 +928,13 @@
       let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level), listReady);
       // 通用路径等到点时还显示着加载图标（#301 北森字典大、网络慢）：接着等，见 GENERIC_LOADING_WAITS。
       // 还在加载就不去搜索，按等待选项超时报。
-      if (generic && ready.reason === 'verification_timeout' && loading()) {
+      // 列表已经出来了、只是旁边留着一个不走的加载标记（底部的懒加载）的，不延长，照下面用已经看到的列表。
+      if (generic && ready.reason === 'verification_timeout' && loading() && !readOptions(level).length) {
         const rest = (h.timeoutMs ?? 2000) * GENERIC_LOADING_WAITS - (Date.now() - waitedFrom);
         ready = await h.waitUntil(ctx, doc.documentElement, watchOptions, listReady, Math.max(0, rest));
-        if (ready.reason === 'verification_timeout' && loading()) {
-          if (level === 0 && !searchDone) ctx.observed.hasOptions = readOptions(level).length > 0;
-          return { reason: 'options_timeout' };
+        if (ready.reason === 'verification_timeout' && loading() && !readOptions(level).length) {
+          if (level === 0 && !searchDone) ctx.observed.hasOptions = false;
+          return { reason: info.cascade ? 'cascade_timeout' : 'options_timeout' };
         }
       }
       if (ready.reason === 'verification_timeout' && (generic && (searchable && !searchDone || lastSeen) || typedAntd && lastSeen)) ready = { value: readOptions(level) };
