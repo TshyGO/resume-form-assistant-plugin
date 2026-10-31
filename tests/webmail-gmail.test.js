@@ -70,6 +70,18 @@ test('visible native single-message raw link preserves exact MIME and its embedd
   assert.deepEqual(Buffer.from(got.bytesBase64, 'base64'), RAW);
   assert.equal(webmail.validateGmail(d, got.target).status, 'current');
 });
+test('opaque Gmail identifiers require a verified legacy ID before using the fixed raw route', async () => {
+  const known = gmail({ cards: card().replace(`#${PERM}`, '#msg-a:opaque-draft-identity') });
+  const original = await capture(known, async url => {
+    assert.equal(new globalThis.URL(url).searchParams.get('th'), LEGACY); return new Response(RAW);
+  });
+  assert.equal(original.status, 'original');
+  const opaque = gmail({ cards: card().replace(`#${PERM}`, '#msg-a:opaque-draft-identity').replace(`data-legacy-message-id="${LEGACY}"`, '') });
+  let requests = 0;
+  const fallback = await capture(opaque, () => { requests++; throw new Error('must not guess a mapping'); });
+  assert.equal(fallback.status, 'excerpt_offer'); assert.equal(requests, 0);
+  assert.equal(fallback.bytesBase64, undefined);
+});
 test('Gmail Show original page uses the real download link and never reconstructs MIME from HTML', async () => {
   const d = original();
   const got = await capture(d, async url => { assert.equal(new globalThis.URL(url).searchParams.get('th'), LEGACY); return new Response(RAW); });

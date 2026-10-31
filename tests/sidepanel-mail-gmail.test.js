@@ -11,9 +11,10 @@ async function panel(capture = { status: 'original', bytesBase64: 'eA==', target
   dom.window.chrome = {
     tabs: { query: async () => [tab], sendMessage: async (id, msg) => {
       calls.push({ destination: 'page', id, msg });
-      return ['WEBMAIL_VALIDATE', 'WEBMAIL_CHECK'].includes(msg.type) ? typeof validation === 'function' ? validation() : validation : capture;
+      if (msg.type === 'WEBMAIL_DISCARD') return { status: 'discarded' };
+      return ['WEBMAIL_VALIDATE', 'WEBMAIL_CHECK'].includes(msg.type) ? typeof validation === 'function' ? validation(msg) : validation : typeof capture === 'function' ? capture() : capture;
     }, onActivated: { addListener: fn => { handlers.activate = fn; } }, onUpdated: { addListener: fn => { handlers.update = fn; } } },
-    runtime: { sendMessage: async msg => { calls.push({ destination: 'desktop', msg }); return result; } }
+    runtime: { sendMessage: async msg => { calls.push({ destination: 'desktop', msg }); return typeof result === 'function' ? result(msg) : result; } }
   };
   vm.runInContext(fs.readFileSync('webmail.js', 'utf8'), dom.getInternalVMContext());
   const transport = require('../gmail-download.js');
@@ -95,6 +96,36 @@ test('valid Gmail excerpts require a second explicit click and report missing or
   const saves = p.calls.filter(call => call.destination === 'desktop');
   assert.equal(saves.length, 1); assert.equal(saves[0].msg.kind, 'excerpt');
   assert.match(p.get('mail-save-status').textContent, /未保存邮件原件及附件/);
+  assert.equal(p.get('mail-excerpt-offer').hidden, true);
+  p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 1);
+});
+test('desktop rejection and transport exceptions clear spent excerpt targets and allow a fresh confirmed retry', async t => {
+  for (const failure of [{ status: 'unavailable' }, () => { throw new Error('desktop disconnected'); }]) {
+    let generation = 0;
+    const consumed = new Set();
+    const p = await panel(() => ({ ...excerpt, target: `target-${++generation}` })); t.after(p.close);
+    p.validation(msg => {
+      if (consumed.has(msg.target)) return { status: 'changed' };
+      if (msg.type === 'WEBMAIL_VALIDATE') consumed.add(msg.target);
+      return { status: 'current' };
+    });
+    p.result(failure);
+    p.get('mail-save-button').click(); await p.flush();
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(p.get('mail-excerpt-offer').hidden, true);
+    assert.match(p.get('mail-save-status').textContent, /检查桌面连接.*重新读取邮件后重试/);
+    assert.doesNotMatch(p.get('mail-save-status').textContent, /邮件已切换/);
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 1);
+    p.result({ status: 'saved' });
+    p.get('mail-save-button').click(); await p.flush();
+    assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 1, 'fresh proposal still requires explicit acceptance');
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(generation, 2); assert.equal(consumed.size, 2);
+    assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 2);
+    assert.match(p.get('mail-save-status').textContent, /已保存网页摘录/);
+  }
 });
 test('switching tabs during Gmail target validation prevents either kind of archive write', async t => {
   const p = await panel(); t.after(p.close);

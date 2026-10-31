@@ -146,6 +146,13 @@
       clearOffer();
     } else say(errors[result?.status] || errors.unavailable, 'error');
   }
+  function excerptFailed(result) {
+    // Acceptance consumed the binding before transfer. Never leave a retry
+    // button wired to that spent target, or revive a potentially stale snapshot.
+    clearOffer();
+    const reason = result?.status !== 'unavailable' ? errors[result?.status] : '';
+    say(`${reason || '尚未确认摘录保存成功，请检查桌面连接。'} 请点击「${saveLabel()}」重新读取邮件后重试。`, 'error');
+  }
   button.addEventListener('click', async () => {
     if (busy || !supported) return;
     clearOffer();
@@ -186,9 +193,11 @@
       if (front?.id !== chosen.tab.id || front?.url !== chosen.tab.url || !await validateTarget(chosen.tab, chosen) || pending !== chosen) {
         clearOffer(); say(errors.changed, 'error'); return;
       }
-      saved(await send('excerpt', { excerpt: chosen.excerpt }, selected), 'excerpt');
+      const result = await send('excerpt', { excerpt: chosen.excerpt }, selected);
+      if (result?.status === 'saved') saved(result, 'excerpt');
+      else excerptFailed(result);
     }
-    catch { say(errors.unavailable, 'error'); }
+    catch { excerptFailed(); }
     finally { setBusy(false); }
   });
   cancel.addEventListener('click', () => { clearOffer(); say('已取消保存摘录。'); });

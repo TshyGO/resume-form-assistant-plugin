@@ -96,4 +96,7 @@ test('source resolution rechecks before and after download and only keeps a fall
   const consumed=[];
   const clipped=await transport.resolveSource({...source,fallback:'message_clipped',excerpt:undefined},async()=>({status:'unavailable'}),async consume=>{consumed.push(consume);return true;});
   assert.equal(clipped.status,'message_clipped'); assert.deepEqual(consumed,[false,false,true]); assert.equal(clipped.excerpt,undefined);
+  let checksBeforeConsume = 0;
+  const changed = await transport.resolveSource({...source,fallback:'message_clipped'},async()=>({status:'unavailable'}),async()=>++checksBeforeConsume < 3);
+  assert.equal(changed.status,'changed', 'a switch during final consumption must not show an earlier mail’s error');
 });

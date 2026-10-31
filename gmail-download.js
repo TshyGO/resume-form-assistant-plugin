@@ -80,7 +80,7 @@
     }
     if (!await validate(false)) return { status: 'changed' };
     if (original) return { ...original, target: source.target };
-    if (source.fallback !== 'excerpt_offer') await validate(true);
+    if (source.fallback !== 'excerpt_offer' && !await validate(true)) return { status: 'changed' };
     return { status: source.fallback, excerpt: source.excerpt, target: source.target, reason };
   }
   function download(value, env = root) {
