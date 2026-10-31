@@ -29,6 +29,9 @@
   let lookupVersion = 0;
   const errors = {
     open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
+    multiple_messages: '当前会话展开了多封邮件，请只展开要保存的一封后重试。',
+    account_unavailable: '无法确认当前 Gmail 账号，请刷新邮箱后重试，或下载 .eml 在桌面导入。',
+    original_unavailable: '未取得完整邮件原件，请使用 Gmail 的下载原始邮件后在桌面导入。',
     unrecognized_mail: '检测到邮件标题，但无法确认当前邮件的完整阅读区域。请等待加载完成后重试；仍失败时可下载 .eml 在桌面导入。',
     changed: '读取期间邮件已切换，请重新点击保存。',
     archive_changed: '桌面档案已恢复或切换，请重新选择申请后保存。',
@@ -85,7 +88,13 @@
     card.setAttribute('aria-busy', String(value));
   }
   function clearOffer() {
-    pending = null; offer.hidden = true; card.dataset.excerptOffer = 'false';
+    const abandoned = pending;
+    pending = null;
+    if (abandoned?.target) {
+      // Drop the content script's matching snapshot without reading mail again.
+      void chrome.tabs.sendMessage(abandoned.tab.id, { type: 'WEBMAIL_DISCARD', target: abandoned.target }, { frameId: 0 }).catch(() => {});
+    }
+    offer.hidden = true; card.dataset.excerptOffer = 'false';
     if (!busy) label.textContent = saveLabel();
   }
   async function refresh() {
@@ -99,13 +108,15 @@
     domain.hidden = !supported;
     if (supported) {
       const host = new URL(tab.url).hostname;
-      contextTitle.textContent = host.endsWith('qq.com') ? 'QQ 邮箱' : host.endsWith('163.com') ? '163 邮箱' : '126 邮箱';
+      contextTitle.textContent = self.ResumeProWebmail.provider(tab.url) === 'gmail' ? 'Gmail' : host.endsWith('qq.com') ? 'QQ 邮箱' : host.endsWith('163.com') ? '163 邮箱' : '126 邮箱';
       domain.textContent = host;
-      contextHint.textContent = '先在邮箱打开一封邮件，再点击保存。';
+      contextHint.textContent = self.ResumeProWebmail.provider(tab.url) === 'gmail'
+        ? '只展开要保存的一封邮件，再点击保存；也可在该封邮件菜单打开“显示原始邮件”后保存原件。'
+        : '先在邮箱打开一封邮件，再点击保存。';
     } else {
       domain.textContent = '';
       contextTitle.textContent = '请先打开网页邮箱';
-      contextHint.textContent = '支持 QQ、163、126 网页邮箱。切换到邮箱页面后，即可保存当前打开的邮件。';
+      contextHint.textContent = '支持 QQ、163、126、Gmail 网页邮箱。切换到邮箱页面后，即可保存当前打开的邮件。';
     }
     setBusy(busy, busyAction);
     if (changed) {
@@ -118,6 +129,13 @@
   }
   async function send(kind, data, applicationId) {
     return chrome.runtime.sendMessage({ type: 'DESKTOP_SAVE_MAIL', kind, ...data, applicationId: applicationId || null });
+  }
+  async function validateTarget(tab, capture) {
+    if (self.ResumeProWebmail.provider(tab.url) !== 'gmail') return true;
+    if (typeof capture.target !== 'string' || !capture.target) return false;
+    const result = await chrome.tabs.sendMessage(tab.id, { type: 'WEBMAIL_VALIDATE', target: capture.target }, { frameId: 0 });
+    const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return front?.id === tab.id && front?.url === tab.url && result?.status === 'current';
   }
   function saved(result, kind) {
     if (result?.status === 'saved') {
@@ -139,15 +157,16 @@
       const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (front?.id !== tab.id || front?.url !== tab.url) { say(errors.changed); return; }
       if (capture?.status === 'original') {
+        if (!await validateTarget(tab, capture)) { say(errors.changed, 'error'); return; }
         say('正在传给桌面并保存原件…');
         saved(await send('eml', { bytesBase64: capture.bytesBase64 }, selected), 'eml');
       } else if (capture?.status === 'excerpt_offer') {
-        pending = { excerpt: capture.excerpt };
+        pending = { excerpt: capture.excerpt, target: capture.target, tab };
         document.getElementById('mail-excerpt-subject').textContent = capture.excerpt.subject;
         offer.hidden = false;
         card.dataset.excerptOffer = 'true';
         offer.scrollIntoView?.({ block: 'nearest' });
-        say(capture.reason === 'too_large' ? '原件超过 25 MiB，可改存网页摘录。' : '未能取得邮件原件，可改存网页摘录。', 'error');
+        say(capture.reason === 'too_large' ? '原件超过 25 MiB，可改存网页摘录。' : (self.ResumeProWebmail.provider(tab.url) === 'gmail' ? '当前页面未提供可用原件。可在 Gmail 单封邮件菜单打开“显示原始邮件”后重试，或确认保存网页摘录。' : '未能取得邮件原件，可改存网页摘录。'), 'error');
       } else say(errors[capture?.status] || errors.unavailable, 'error');
     } catch { say('无法读取当前邮箱页面。请刷新邮箱后重试，或下载 .eml 在桌面导入。', 'error'); }
     finally { setBusy(false); }
@@ -157,7 +176,13 @@
     const chosen = pending;
     const selected = selectedApplication?.applicationId || null;
     setBusy(true); say('正在保存网页摘录…');
-    try { saved(await send('excerpt', { excerpt: chosen.excerpt }, selected), 'excerpt'); }
+    try {
+      const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (front?.id !== chosen.tab.id || front?.url !== chosen.tab.url || !await validateTarget(chosen.tab, chosen) || pending !== chosen) {
+        clearOffer(); say(errors.changed, 'error'); return;
+      }
+      saved(await send('excerpt', { excerpt: chosen.excerpt }, selected), 'excerpt');
+    }
     catch { say(errors.unavailable, 'error'); }
     finally { setBusy(false); }
   });
