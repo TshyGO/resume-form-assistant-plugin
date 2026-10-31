@@ -510,6 +510,8 @@ test("a span of two dates gives the start or the end only when the question says
   // 「起」「止」单独成词才算（「（起）」「止：」），别的词里带的不算。
   assert.equal(pick("2019.09-2023.06", "在校时间（起）"), "2019.09");
   assert.equal(pick("2019.09-2023.06", "在校时间 止"), "2023.06");
+  assert.equal(pick("2019.09-2023.06", "在校时间：止"), "2023.06");
+  assert.equal(pick("2019.09-2023.06", "工作时间:起"), "2019.09");
   assert.equal(pick("2019.09-2023.06", "起始日期"), "2019.09");
   assert.equal(pick("2019.09-2023.06", "发起时间"), "2019.09-2023.06");
   assert.equal(pick("2019.09-2023.06", "起薪日期"), "2019.09-2023.06");
