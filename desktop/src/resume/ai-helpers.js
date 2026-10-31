@@ -35,6 +35,14 @@
   const MOBILE_VALUE = /^(\+?86)?1[3-9]\d{9}$/;
   const CN_ID_VALUE = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dxX]$/;
 
+  // #301 #418 证件类型的几种叫法：「我的信息」写全称（profile-fields.js），网站常写简称，旁边还有「香港居民身份证」这类，
+  // 按包含比会几项都沾边。只收确定是同一种证件的；「港澳通行证」也可能是内地居民往来港澳通行证，不收。
+  const ID_TYPE_NAMES = [
+    ["居民身份证", "身份证", "中国居民身份证", "中华人民共和国居民身份证", "大陆居民身份证", "二代身份证"],
+    ["港澳居民来往内地通行证", "回乡证"],
+    ["台湾居民来往大陆通行证", "台胞证"]
+  ].map((names) => new Set(names.map(normalizeText)));
+
   function detectCascadeGroups(fields, fieldMap) {
     const selectFields = fields.filter((f) => f.tagName === "select");
     let cascadeGroupIndex = 0;
@@ -349,6 +357,11 @@
     index = findUsable((option) => normalizeText(optionText(option)) === normalizedTarget
       || normalizeText(optionValue(option)) === normalizedTarget);
     if (index >= 0) return index;
+
+    // 证件类型（见 ID_TYPE_NAMES）：选项里正好一项是同一种证件的另一种叫法才用它，几项都是就照下面的规则。
+    const idNames = ID_TYPE_NAMES.find((names) => names.has(normalizedTarget));
+    const sameId = idNames ? usable.filter(({ option }) => idNames.has(normalizeText(optionText(option))) || idNames.has(normalizeText(optionValue(option)))) : [];
+    if (sameId.length === 1) return sameId[0].index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
     const negatedBefore = (text, at) => /(非|不|无|未)$/.test(text.slice(0, at));

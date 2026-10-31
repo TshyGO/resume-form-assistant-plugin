@@ -237,6 +237,9 @@
       let expected = deps.normalizeText(ctx.el, typed);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
+      // #301 #417 只读的框：聚焦之前记下看得见的对话框、浮层，写不上时收起聚焦后网页打开的那一块（见末尾）。
+      const readonly = !shown && ctx.el.readOnly === true;
+      const layersBefore = readonly ? scope.ResumeProCustomControls?.openLayers?.(ctx.el.ownerDocument, visible) || null : null;
       if (!shown && !await deps.runTextLifecycle(ctx.el, typed, false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
       ctx.acceptedOnce = shows(ctx.el, expected);
       await deps.waitTextCommit();
@@ -318,6 +321,13 @@
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
+      }
+      // #301 #417 只读的框写不上：多半是网页自己的选择框（智联的城市、学校、专业，点开是对话框、el-popover 或自制浮层），要在网页里选。
+      // 照样先写过了（v-model 绑定的只读框、读输入框值的组件写得上）；写不上的单独报，聚焦时网页打开的收起来。
+      if (readonly && !verdict.ok && rejected(verdict.reason)) {
+        // 收起之前让宿主记下冒出过弹层（诊断的 overlay=），收起以后它就看不到了。
+        if (layersBefore) { ctx.options.beforeDismiss?.(); await scope.ResumeProCustomControls.dismissOpened?.(ctx, layersBefore, host); }
+        return result(false, 'readonly_picker', ctx, after ? { after } : {});
       }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
       if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, previous,

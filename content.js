@@ -86,6 +86,7 @@
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     format_mismatch: "只能填数字",
+    readonly_picker: "网页自己的选择框",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
@@ -5157,9 +5158,9 @@
       ? { opened: "none" } : null;
   }
 
-  // #399 #405 写入被拒（值没有写上、被页面退回）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
+  // #399 #405 写入被拒（值没有写上、被页面退回，#417 只读的选择框写不上）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
   // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
-  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted"]);
+  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted", "readonly_picker"]);
   const textLeftovers = new WeakMap();
   // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
   const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",
@@ -5253,7 +5254,9 @@
       // 没有 MutationObserver 时只在结束时看一次。
     }
     const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
-    return { kind: () => kind, settled, stop, calendarOpen };
+    // 插件自己要收起网页打开的弹层之前（#301 #417 只读框写不上），先看一眼：防抖的那一次可能还没到，收起以后就看不到了。
+    const peek = () => { if (!done && look()) stop(); };
+    return { kind: () => kind, settled, stop, calendarOpen, peek };
   }
 
   // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
@@ -5267,7 +5270,8 @@
     // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
     if (watch) overlayWatches.set(control, watch);
     else if (control && typeof control === 'object') overlayWatches.delete(control);
-    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill,
+      beforeDismiss: () => watch?.peek() });
     if (result.ok && watch && isInputElement(control) && await calendarKeptOpen(watch, control, value)) {
       result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
     }
