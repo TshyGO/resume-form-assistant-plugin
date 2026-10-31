@@ -200,6 +200,100 @@ test("select validation keeps an ID type that only matches by its other name", (
   assert.deepEqual(filtered, [{ fieldId: "idtype", value: "居民身份证" }]);
 });
 
+// #429 同义词表（ai-helpers.js 的 OPTION_SYNONYMS）：从源码里取出这张表，查每种写法只在一组里、民族是 56 个。
+function synonymTable() {
+  const source = fs.readFileSync(path.join(__dirname, "..", "ai-helpers.js"), "utf8");
+  const start = source.indexOf("  const ETHNIC_NAMES");
+  const end = source.indexOf("  const SYNONYM_GROUPS");
+  assert.ok(start > 0 && end > start, "the synonym table is found in ai-helpers.js");
+  return new Function(`${source.slice(start, end)}\nreturn { ETHNIC_NAMES, LEVEL_SYNONYMS, OPTION_SYNONYMS };`)();
+}
+
+test("option synonyms: every way of writing belongs to one group only, and all 56 ethnic groups are listed", () => {
+  const { ETHNIC_NAMES, LEVEL_SYNONYMS, OPTION_SYNONYMS } = synonymTable();
+  assert.equal(new Set(ETHNIC_NAMES).size, 56);
+  const owner = new Map();
+  for (const names of OPTION_SYNONYMS) {
+    assert.ok(names.length >= 2, names.join("/"));
+    for (const name of names) {
+      const key = helpers.normalizeText(name);
+      assert.ok(!owner.has(key) || owner.get(key) === names, `${name} is in ${owner.get(key)?.join("/")} and ${names.join("/")}`);
+      owner.set(key, names);
+      // 每种写法都认得出同组的其他写法；外语等级要看整张列表，单看一项不算。
+      for (const other of names) {
+        const level = LEVEL_SYNONYMS.includes(names) && helpers.normalizeText(other) !== key;
+        assert.equal(helpers.isSameOptionText(other, name), !level, `${other} = ${name}`);
+      }
+    }
+  }
+});
+
+test("findSelectOptionIndex: another way of writing the same thing is used when exactly one option is one", () => {
+  const pick = (list, value) => list[helpers.findSelectOptionIndex(options(list), value)];
+  // 民族：网站写不带「族」的，单字的也算。
+  assert.equal(pick(["汉", "蒙古", "回", "土家", "土"], "汉族"), "汉");
+  assert.equal(pick(["汉", "蒙古", "回", "土家", "土"], "土家族"), "土家");
+  assert.equal(pick(["汉", "蒙古", "回", "土家", "土"], "土族"), "土");
+  // 政治面貌：国标全称不含「共青团员」，按包含比对不上。
+  const gb = ["中国共产党党员", "中国共产党预备党员", "中国共产主义青年团团员", "无党派民主人士", "群众"];
+  assert.equal(pick(gb, "共青团员"), "中国共产主义青年团团员");
+  assert.equal(pick(gb, "中共党员"), "中国共产党党员");
+  assert.equal(pick(gb, "中共预备党员"), "中国共产党预备党员");
+  // 「中共党员」包含于「中共预备党员」以外的写法。
+  assert.equal(pick(["中国共产党党员", "中国共产党预备党员", "中国农工民主党党员"], "共产党员"), "中国共产党党员");
+  // 外语等级、性别、学历。
+  assert.equal(pick(["四级", "六级", "专四", "专八"], "CET-6"), "六级");
+  assert.equal(pick(["CET-4", "CET-6", "TEM-4", "TEM-8"], "专业英语四级"), "TEM-4");
+  assert.equal(pick(["Male", "Female"], "女"), "Female");
+  assert.equal(pick(["男", "女"], "男性"), "男");
+  assert.equal(pick(["高中", "大专", "本科", "硕士研究生"], "大学专科"), "大专");
+});
+
+test("findSelectOptionIndex: synonyms stay inside their own meaning", () => {
+  const index = (list, value) => helpers.findSelectOptionIndex(options(list), value);
+  // 学历和学位不混。
+  assert.equal(index(["学士", "硕士", "博士"], "本科"), -1);
+  assert.equal(index(["本科", "硕士研究生"], "学士"), -1);
+  // 国标里「群众」和「无党派民主人士」是两项。
+  assert.equal(index(["无党派民主人士", "中共党员"], "群众"), -1);
+  assert.equal(index(["无党派民主人士", "群众"], "无党派人士"), 0);
+  // 「中国」不当成「中国大陆」：港澳台居民的国籍也是中国。
+  assert.equal(index(["中国大陆", "中国香港", "中国澳门", "中国台湾"], "中国"), -1);
+  // 「健康」「良好」不当同义。
+  assert.equal(index(["健康", "一般", "较差"], "良好"), -1);
+  // 单写「党员」不收：民主党派的党员也这么写，几项都沾边时照旧不选。
+  assert.equal(index(["中共党员", "中共预备党员", "农工党党员", "致公党党员"], "党员"), -1);
+  // 外语等级只在选项里至少有两种外语等级时才用：计算机等级题的「四级」不收「CET-4」。
+  assert.equal(index(["一级", "二级", "三级", "四级"], "CET-4"), -1);
+  assert.equal(index(["英语四级", "未通过"], "CET-4"), -1);
+  assert.equal(index(["CET-4", "CET-6", "未通过"], "四级"), 0);
+  // 两项都是同组的写法：不猜。
+  assert.equal(index(["中共党员", "中国共产党党员", "群众"], "共产党员"), -1);
+  // 同名的照旧先用。
+  assert.equal(index(["汉", "汉族"], "汉族"), 1);
+});
+
+test("select validation keeps an answer whose option is written another way", () => {
+  const filtered = helpers.filterValidMatches([
+    { fieldId: "nation", label: "民族", inputType: "select", options: ["请选择", "汉", "回", "满"] },
+    { fieldId: "party", label: "政治面貌", inputType: "select", options: ["中国共产党党员", "中国共产主义青年团团员", "群众"] }
+  ], [{ fieldId: "nation", value: "汉族" }, { fieldId: "party", value: "共青团员" }]);
+  assert.deepEqual(filtered, [{ fieldId: "nation", value: "汉族" }, { fieldId: "party", value: "共青团员" }]);
+});
+
+test("optionSearchText: types the part every way of writing shares, otherwise the value itself", () => {
+  assert.equal(helpers.optionSearchText("土家族"), "土家");
+  assert.equal(helpers.optionSearchText("共青团员"), "团员");
+  assert.equal(helpers.optionSearchText("中国共产主义青年团团员"), "团员");
+  assert.equal(helpers.optionSearchText(" 汉族 "), "汉");
+  // 没有共有的一段（「CET-6」和「六级」，「中共党员」和「中国共产党党员」），或不在表里：照原样。
+  assert.equal(helpers.optionSearchText("中共党员"), "中共党员");
+  assert.equal(helpers.optionSearchText("CET-6"), "CET-6");
+  assert.equal(helpers.optionSearchText("男性"), "男性");
+  assert.equal(helpers.optionSearchText("北京大学"), "北京大学");
+  assert.equal(helpers.optionSearchText(""), "");
+});
+
 test("findSelectOptionIndex: negated options never stand in for the positive one, and back", () => {
   assert.equal(helpers.findSelectOptionIndex(options(["全日制", "非全日制"]), "全日制"), 0);
   assert.equal(helpers.findSelectOptionIndex(options(["全日制", "非全日制"]), "非全日制"), 1);

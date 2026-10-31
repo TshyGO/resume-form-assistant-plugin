@@ -531,10 +531,11 @@
     const padding = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
     return scroller.scrollHeight - padding - (bottom - top) > Math.max(rows[Math.floor(rows.length / 2)] * 0.8, 20);
   }
-  // partial：列表不全（见 partialList）。只认完全相同或归一化相同的一项，不靠「包含」去猜，几项都沾边也按没有匹配，好去搜索。
-  // 联想框的建议不走这里，见 sameOption。
+  // partial：列表不全（见 partialList）。只认完全相同、归一化相同或同一个意思的另一种写法（#429，ai-helpers.js 的 OPTION_SYNONYMS）的一项，
+  // 不靠「包含」去猜，几项都沾边也按没有匹配，好去搜索。联想框的建议不走这里，见 sameOption。
   function match(list, value, helpers, partial = false) {
-    const same = option => [option.value, option.text].some(text => trim(text) === trim(value) || helpers.normalizeText(text) === helpers.normalizeText(value));
+    const same = option => [option.value, option.text].some(text => trim(text) === trim(value)
+      || (helpers.isSameOptionText ? helpers.isSameOptionText(text, value) : helpers.normalizeText(text) === helpers.normalizeText(value)));
     const index = helpers.findSelectOptionIndex(list, value);
     if (partial && (index < 0 || !same(list[index]))) return { reason: 'no_option_match' };
     if (index < 0) {
@@ -820,6 +821,11 @@
     // 通用路径不做级联：分不清每一列，宁可不填。
     if (info.library === 'generic' && info.cascade) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
+    // 搜索框里打的字：有别的写法时打各种写法共有的一段（「土家族」打「土家」），见 ai-helpers.js 的 optionSearchText。
+    const searchText = text => h.helpers.optionSearchText ? h.helpers.optionSearchText(text) : text;
+    // 选项文字和要填的值算不算同一项：归一化后相同，或是同一个意思的另一种写法（#429）。
+    const sameText = (text, value) => h.helpers.isSameOptionText ? h.helpers.isSameOptionText(text, value)
+      : h.helpers.normalizeText(text) === h.helpers.normalizeText(value);
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
     const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
       && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
@@ -834,7 +840,7 @@
       const sameAsWanted = text => {
         const full = trim(text), [first, ...rest] = full.split(/\s*\/\s*/);
         const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
-        return [full, primary].some(value => h.helpers.normalizeText(value) === h.helpers.normalizeText(desired[0]));
+        return [full, primary].some(value => sameText(value, desired[0]));
       };
       const shownNow = selectedTexts(info);
       if (shownNow?.length === 1 && sameAsWanted(shownNow[0])) return { accepted: () => (selectedTexts(info) || []).length === 1 && sameAsWanted(selectedTexts(info)[0]) };
@@ -921,8 +927,8 @@
         ? Array.from(info.root.querySelectorAll('input')).find(input => safeSearch(input) && h.visible(input)) : null;
     if (typeInto && !dateWanted && opened.reason === 'verification_timeout' && safeSearch(typeInto) && h.visible(typeInto)) {
       const reason = h.stop(ctx, true); if (reason) return { reason };
-      state.searchInput = typeInto; state.searchBefore = typeInto.value; state.query = desired[0];
-      if (info.freeText) h.type(typeInto, desired[0], ctx); else { h.write(typeInto, desired[0], ctx); h.input(typeInto); }
+      state.searchInput = typeInto; state.searchBefore = typeInto.value; state.query = info.freeText ? desired[0] : searchText(desired[0]);
+      if (info.freeText) h.type(typeInto, desired[0], ctx); else { h.write(typeInto, state.query, ctx); h.input(typeInto); }
       typedFirst = true; typedAt = Date.now();
       opened = await h.waitUntil(ctx, doc.documentElement, info.library === 'generic' ? () => genericOpened(1) : findOpened, Boolean,
         info.freeText ? Math.min(FREE_TEXT_TYPED_MS, h.timeoutMs ?? FREE_TEXT_TYPED_MS) : undefined);
@@ -1030,7 +1036,7 @@
       // AntD 先输入了要找的值：先到的列表可能是输入前的请求晚到的结果。列表里有同名的一项才马上选，否则等满再用最后的列表。
       const typedAntd = typedFirst && !generic;
       const sameName = list => list.some(option => !option.disabled && [option.text, option.value]
-        .some(text => h.helpers.normalizeText(text) === h.helpers.normalizeText(desired[level])));
+        .some(text => sameText(text, desired[level])));
       // 联想框打字后的建议里没有同名的一项：停住一阵再算没有（见 FREE_TEXT_STEADY_MS），不用等满。
       const typedSettled = since => info.freeText && Date.now() - since >= FREE_TEXT_STEADY_MS && Date.now() - typedAt >= FREE_TEXT_SETTLE_MS;
       // 列表不全时只认同名的一项（见 partialList），没有就先搜索，搜完照样看列表全不全。
@@ -1065,9 +1071,9 @@
         if (!safeSearch(searchInput)) return { reason: 'unsupported_control' };
         if (!searchInput.isConnected || (!info.root.contains(searchInput) && !popup.contains(searchInput) && !ctx.popup.contains(searchInput))) return { reason: 'element_disconnected' };
         const signature = list.map(option => `${option.value}:${option.text}`).join('\n');
-        state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = desired[level];
+        state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = info.freeText ? desired[level] : searchText(desired[level]);
         info.requireCommitSignal = info.library === 'aria';
-        if (info.freeText) h.type(searchInput, desired[level], ctx); else { h.write(searchInput, desired[level], ctx); h.input(searchInput); }
+        if (info.freeText) h.type(searchInput, desired[level], ctx); else { h.write(searchInput, state.query, ctx); h.input(searchInput); }
         searchDone = true; typedAt = Date.now();
         let lastSignature = signature, stableSince = Date.now();
         const updated = await h.waitUntil(ctx, doc.documentElement, () => {

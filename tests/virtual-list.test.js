@@ -387,3 +387,36 @@ test("a list placed by transforms that drew only its first screen is still not c
   assert.notEqual(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.picked, []);
 });
+
+// #429 民族、政治面貌的长下拉写法和资料不一样：只画出第一屏时，同一个意思的另一种写法也算同名；不在第一屏就搜各种写法共有的一段。
+const ETHNIC = ("汉 蒙古 回 藏 维吾尔 苗 彝 壮 布依 朝鲜 满 侗 瑶 白 土家 哈尼 哈萨克 傣 黎 傈僳 佤 畲 高山 拉祜 水 东乡 纳西 景颇 柯尔克孜 土 "
+  + "达斡尔 仫佬 羌 布朗 撒拉 毛南 仡佬 锡伯 阿昌 普米 塔吉克 怒 乌孜别克 俄罗斯 鄂温克 德昂 保安 裕固 京 塔塔尔 独龙 鄂伦春 赫哲 门巴 珞巴 基诺").split(" ");
+const PARTY = ["中国共产党党员", "中国共产党预备党员", "中国共产主义青年团团员", "中国国民党革命委员会会员", "中国民主同盟盟员", "中国民主建国会会员",
+  "中国民主促进会会员", "中国农工民主党党员", "中国致公党党员", "九三学社社员", "台湾民主自治同盟盟员", "无党派民主人士", "群众"];
+
+test("virtual list: another way of writing the wanted value on the first screen is chosen without searching", async () => {
+  for (const [choices, value, wanted] of [[ETHNIC, "汉族", "汉"], [PARTY, "共青团员", "中国共产主义青年团团员"], [PARTY, "中共党员", "中国共产党党员"]]) {
+    for (const layout of [false, true]) {
+      const h = antd(choices, { search: true, layout });
+      const result = await h.api.operate(h.target, value);
+      assert.equal(result.ok, true, `${value} layout=${layout}: ${JSON.stringify(result)}`);
+      assert.deepEqual(h.picked, [wanted]);
+      assert.deepEqual(h.searches, []);
+    }
+  }
+});
+
+test("virtual list with search: a value written another way off screen is found by the part every way shares", async () => {
+  const h = antd(ETHNIC, { search: true, layout: true });
+  const result = await h.api.operate(h.target, "土家族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.searches, ["土家"]);
+  assert.deepEqual(h.picked, ["土家"]);
+});
+
+test("virtual list without search: a value written another way off screen is still not guessed", async () => {
+  const h = antd(ETHNIC, { layout: true });
+  const result = await h.api.operate(h.target, "土家族");
+  assert.equal(result.reason, "no_option_match", JSON.stringify(result));
+  assert.deepEqual(h.picked, []);
+});
