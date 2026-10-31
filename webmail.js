@@ -105,16 +105,16 @@
         sentTime: text(first(header, '.nui-read-time, .js-component-datetime')), body: bodyText(content) };
       // No command is taken from the email's own document.
       const links = [...pane.querySelectorAll('.nui-toolbar a[href], [role="toolbar"] a[href]')];
-      matches.push({ doc, body, data, links, sourceUrls, fingerprint: JSON.stringify([data, [...ids]]) });
+      matches.push({ doc, body, title, content, data, links, sourceUrls, fingerprint: JSON.stringify([data, [...ids]]) });
     }
     return matches;
   }
   // Gmail message cards and the native "Show original" page are separate
   // surfaces. Never treat an entire conversation or a quoted card as one mail.
-  let gmailTarget = null;
-  function releaseGmail() {
-    const previous = gmailTarget;
-    gmailTarget = null;
+  let mailTarget = null;
+  function releaseTarget() {
+    const previous = mailTarget;
+    mailTarget = null;
     previous?.dispose?.();
   }
   function gmailRoute(doc) {
@@ -285,24 +285,25 @@
       return account ? { account, doc: source } : null;
     } catch { return null; }
   }
-  function rememberGmail(ctx, result) {
-    releaseGmail();
-    const target = ctx.doc.defaultView.crypto.randomUUID();
-    const view = ctx.doc.defaultView;
-    const url = ctx.doc.location.href;
-    const clear = () => releaseGmail();
+  function rememberTarget(ctx, result, doc = ctx.doc) {
+    releaseTarget();
+    const target = doc.defaultView.crypto.randomUUID();
+    const view = doc.defaultView;
+    const url = doc.location.href;
+    const clear = () => releaseTarget();
     for (const event of ['pagehide', 'hashchange', 'popstate']) view.addEventListener(event, clear);
     view.navigation?.addEventListener('navigate', clear);
     // Older engines lack Navigation API events for pushState/replaceState.
     // While a proposal exists, inspect only its URL, never poll mail content.
     const watcher = !view.navigation?.addEventListener ? root.setInterval(() => {
-      if (ctx.doc.location.href !== url) releaseGmail();
+      if (doc.location.href !== url) releaseTarget();
     }, 250) : null;
     watcher?.unref?.();
     const expiry = root.setTimeout(clear, 5 * 60 * 1000);
     expiry?.unref?.();
-    gmailTarget = { doc: ctx.doc, target, url, fingerprint: ctx.fingerprint, body: ctx.body, title: ctx.title,
-      accountDocument: ctx.accountDocument || ctx.doc,
+    mailTarget = { doc, target, url, name: provider(url), fingerprint: ctx.fingerprint, body: ctx.body, title: ctx.title,
+      sourceDocument: ctx.doc, sourceUrl: ctx.doc.location.href, sourceUrls: JSON.stringify(ctx.sourceUrls || []),
+      content: ctx.content || ctx.body, accountDocument: ctx.accountDocument || ctx.doc,
       dispose() {
         for (const event of ['pagehide', 'hashchange', 'popstate']) view.removeEventListener(event, clear);
         view.navigation?.removeEventListener('navigate', clear);
@@ -311,19 +312,21 @@
       } };
     return { ...result, target };
   }
-  function validateGmail(doc, target, consume = true) {
-    if (!gmailTarget || gmailTarget.doc !== doc || gmailTarget.target !== target) return { status: 'changed' };
-    const snapshot = gmailTarget;
-    if (consume) releaseGmail(); // Acceptance consumes the one-use binding.
-    if (doc.location.href !== snapshot.url) { releaseGmail(); return { status: 'changed' }; }
-    const current = inspectGmail(doc).ctx;
+  function validateTarget(doc, target, consume = true) {
+    if (!mailTarget || mailTarget.doc !== doc || mailTarget.target !== target) return { status: 'changed' };
+    const snapshot = mailTarget;
+    if (consume) releaseTarget(); // Acceptance consumes the one-use binding.
+    if (doc.location.href !== snapshot.url) { releaseTarget(); return { status: 'changed' }; }
+    const current = provider(doc.location.href) === snapshot.name ? opened(doc, snapshot.name) : null;
     const matches = current && current.body === snapshot.body && current.title === snapshot.title
-      && (current.accountDocument || doc) === snapshot.accountDocument && current.fingerprint === snapshot.fingerprint;
-    if (!matches) releaseGmail();
+      && current.doc === snapshot.sourceDocument && current.doc.location.href === snapshot.sourceUrl
+      && (current.content || current.body) === snapshot.content && JSON.stringify(current.sourceUrls || []) === snapshot.sourceUrls
+      && (current.accountDocument || current.doc) === snapshot.accountDocument && current.fingerprint === snapshot.fingerprint;
+    if (!matches) releaseTarget();
     return { status: matches ? 'current' : 'changed' };
   }
-  function discardGmail(doc, target) {
-    if (gmailTarget?.doc === doc && gmailTarget.target === target) releaseGmail();
+  function discardTarget(doc, target) {
+    if (mailTarget?.doc === doc && mailTarget.target === target) releaseTarget();
     return { status: 'discarded' };
   }
   function opened(doc, name) {
@@ -360,7 +363,7 @@
       const modernQQ = name === 'qq' && d.location.hostname === 'wx.mail.qq.com' && d.location.pathname === '/home/index';
       const pane = body.closest('.mail-list-page-reader-body') || body;
       const visibleIds = modernQQ ? [pane, title, fromNode, body].map(node => [node?.getAttribute('data-mailid'), node?.getAttribute('mailid')]) : [];
-      matches.push({ doc: d, body, title, data, links, sourceUrls,
+      matches.push({ doc: d, body, content: bodyNode, title, data, links, sourceUrls,
         fingerprint: JSON.stringify([data, ids, modernQQ ? d.location.href : '', visibleIds]) });
     }
     // Refuse an ambiguous page with two open message panes instead of choosing the wrong one.
@@ -491,9 +494,9 @@
     } catch { return {}; }
   }
   async function capture(doc, fetcher = root.fetch.bind(root), requestQQ = message => root.chrome.runtime.sendMessage(message)) {
+    releaseTarget();
     const name = provider(doc.location.href);
     if (!name) return { status: 'unsupported' };
-    if (name === 'gmail') releaseGmail();
     const inspection = name === 'gmail' ? inspectGmail(doc) : null;
     if (inspection?.status) return { status: inspection.status };
     const ctx = inspection?.ctx || opened(doc, name);
@@ -512,7 +515,7 @@
       const fits = new TextEncoder().encode(ctx.data.body).length <= MAX_EXCERPT && ctx.data.subject.length <= 500
         && ctx.data.from.length <= 500 && ctx.data.sentTime.length <= 200;
       const fallback = ctx.originalPage ? 'original_unavailable' : ctx.clipped ? 'message_clipped' : fits ? 'excerpt_offer' : 'too_large';
-      return rememberGmail(ctx, { status: 'gmail_source', originals: candidates.slice(0, 3), subject: ctx.data.subject,
+      return rememberTarget(ctx, { status: 'gmail_source', originals: candidates.slice(0, 3), subject: ctx.data.subject,
         fallback, excerpt: fallback === 'excerpt_offer' ? ctx.data : undefined });
     }
     const current = new URL(doc.location.href);
@@ -531,7 +534,7 @@
         if (!looksLikeMail(bytes)) continue; // Login/error pages are never called an original.
         if (!unchanged()) return { status: 'changed' };
         const result = { status: 'original', kind: 'eml', bytesBase64: base64(bytes), subject: ctx.data.subject };
-        return name === 'gmail' ? rememberGmail(ctx, result) : result;
+        return name === 'gmail' ? rememberTarget(ctx, result) : result;
       } catch (error) {
         if (error.message === 'too_large') reason = 'too_large';
       } finally { clearTimeout(timer); controller.abort(); }
@@ -543,9 +546,9 @@
         || ctx.data.from.length > 500 || ctx.data.sentTime.length > 200) return { status: 'too_large' };
     // This is a proposal only. The user must explicitly accept saving an excerpt in the side panel.
     const result = { status: 'excerpt_offer', reason, excerpt: ctx.data };
-    return name === 'gmail' ? rememberGmail(ctx, result) : result;
+    return rememberTarget(ctx, result, doc);
   }
-  const api = { provider, capture, opened, rawCandidates, looksLikeMail, readBounded, base64, validateGmail, discardGmail, MAX_BYTES };
+  const api = { provider, capture, opened, rawCandidates, looksLikeMail, readBounded, base64, validateTarget, discardTarget, validateGmail: validateTarget, discardGmail: discardTarget, MAX_BYTES };
   root.ResumeProWebmail = api;
   try {
     if (typeof module === 'object' && module && typeof module.exports === 'object') module.exports = api;
@@ -557,13 +560,13 @@
         reply({ status: 'forbidden' }); return false;
       }
       if (message.type === 'WEBMAIL_DISCARD') {
-        reply(discardGmail(document, message.target)); return false;
+        reply(discardTarget(document, message.target)); return false;
       }
       if (message.type === 'WEBMAIL_CHECK') {
-        reply(validateGmail(document, message.target, false)); return false;
+        reply(validateTarget(document, message.target, false)); return false;
       }
       if (message.type === 'WEBMAIL_VALIDATE') {
-        reply(validateGmail(document, message.target)); return false;
+        reply(validateTarget(document, message.target)); return false;
       }
       capture(document).then(reply, () => reply({ status: 'unavailable' }));
       return true;

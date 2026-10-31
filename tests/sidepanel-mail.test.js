@@ -8,8 +8,15 @@ async function panel(capture = { status: 'original', bytesBase64: 'eA==' }) {
   const calls = []; const handlers = {};
   let tab = { id: 1, url: 'https://mail.qq.com/cgi-bin/frame_html?sid=synthetic' };
   let result = { status: 'saved', duplicate: false };
+  let validation = {status:'current'};
   dom.window.chrome = {
-    tabs: { query: async () => [tab], sendMessage: async (id, msg) => { calls.push({ target: 'page', id, msg }); return typeof capture === 'function' ? capture() : capture; },
+    tabs: { query: async () => [tab], sendMessage: async (id, msg) => {
+      calls.push({ target: 'page', id, msg });
+      if (msg.type === 'WEBMAIL_CHECK' || msg.type === 'WEBMAIL_VALIDATE') return typeof validation === 'function' ? validation(msg) : validation;
+      if (msg.type === 'WEBMAIL_DISCARD') return {status:'discarded'};
+      const value = typeof capture === 'function' ? await capture() : capture;
+      return value?.status === 'excerpt_offer' ? {target:'synthetic-target',...value} : value;
+    },
       onActivated: { addListener: fn => { handlers.activate = fn; } }, onUpdated: { addListener: fn => { handlers.update = fn; } } },
     runtime: { sendMessage: async msg => { calls.push({ target: 'desktop', msg }); return msg.type === 'DESKTOP_CANDIDATES_FOR'
       ? { status: 'ok', exact: [], sameCompany: [{ applicationId: 'app', company: '某公司', title: '产品经理' }] } : typeof result === 'function' ? result() : result; } }
@@ -17,7 +24,7 @@ async function panel(capture = { status: 'original', bytesBase64: 'eA==' }) {
   for (const file of ['webmail.js', 'sidepanel-mail.js']) vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext());
   const flush = () => new Promise(resolve => setImmediate(resolve)); await flush();
   return { calls, get: id => dom.window.document.getElementById(id), flush,
-    async change(next) { tab = next; handlers.activate(); await flush(); }, result: value => { result = value; }, close: () => dom.window.close() };
+    async change(next) { tab = next; handlers.activate(); await flush(); }, result: value => { result = value; }, validation: value => {validation=value;}, close: () => dom.window.close() };
 }
 test('opening a mailbox side panel reads URL metadata only; save button starts capture', async () => {
   const p = await panel(); assert.equal(p.get('mail-save').hidden, false); assert.equal(p.calls.length, 0);
@@ -31,7 +38,7 @@ test('fallback requires a second explicit click and cancellation does not write'
   p.get('mail-save-button').click(); await p.flush();
   assert.equal(p.get('mail-excerpt-offer').hidden, false); assert.equal(p.calls.length, 1);
   assert.equal(p.get('mail-save-label').textContent, '重试取得原件');
-  p.get('mail-excerpt-cancel').click(); await p.flush(); assert.equal(p.calls.length, 1);
+  p.get('mail-excerpt-cancel').click(); await p.flush(); assert.equal(p.calls.filter(c=>c.msg.type==='DESKTOP_SAVE_MAIL').length, 0);
   assert.equal(p.get('mail-save-label').textContent, '暂不关联并保存');
   p.get('mail-save-button').click(); await p.flush(); p.get('mail-excerpt-accept').click(); await p.flush();
   const writes = p.calls.filter(c => c.target === 'desktop'); assert.equal(writes.length, 1); assert.equal(writes[0].msg.kind, 'excerpt');
@@ -115,4 +122,52 @@ test('a desktop failure after changing tabs cannot revive the previous non-Gmail
   assert.equal(p.get('mail-excerpt-offer').hidden,true);
   p.get('mail-excerpt-accept').click(); await p.flush();
   assert.equal(p.calls.filter(c=>c.msg.type==='DESKTOP_SAVE_MAIL').length,1);
+});
+
+test('same-URL mail switches prevent non-Gmail retries while unchanged proposals use non-consuming checks', async t => {
+  for (const url of ['https://mail.qq.com/','https://mail.163.com/','https://mail.126.com/']) {
+    const p = await panel({status:'excerpt_offer',excerpt:{subject:'Old mail',body:'Old body'}}); t.after(p.close);
+    await p.change({id:1,url});
+    p.get('mail-save-button').click(); await p.flush();
+    p.result({status:'unavailable'});
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(p.get('mail-excerpt-offer').hidden,false);
+    assert.equal(p.calls.filter(c=>c.msg.type==='WEBMAIL_CHECK').length,1);
+    assert.equal(p.calls.some(c=>c.msg.type==='WEBMAIL_VALIDATE'),false);
+    p.validation({status:'changed'}); p.result({status:'saved'});
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(p.calls.filter(c=>c.msg.type==='WEBMAIL_CHECK').length,2);
+    assert.equal(p.calls.filter(c=>c.msg.type==='DESKTOP_SAVE_MAIL').length,1);
+    assert.equal(p.get('mail-excerpt-offer').hidden,true);
+    assert.match(p.get('mail-save-status').textContent,/邮件已切换/);
+  }
+});
+test('missing non-Gmail bindings and an unloaded page cannot bypass excerpt target checks', async t => {
+  for (const disconnected of [false,true]) {
+    const p = await panel({status:'excerpt_offer',target:disconnected?'target':undefined,excerpt:{subject:'Synthetic',body:'Body'}}); t.after(p.close);
+    p.get('mail-save-button').click(); await p.flush();
+    if (disconnected) p.validation(()=>{throw new Error('page unloaded');});
+    p.get('mail-excerpt-accept').click(); await p.flush();
+    assert.equal(p.calls.filter(c=>c.msg.type==='DESKTOP_SAVE_MAIL').length,0);
+    assert.equal(p.get('mail-excerpt-offer').hidden,true);
+  }
+});
+
+test('actual QQ capture and content validation block a retry after switching mail at the same URL',async t=>{
+  const webmail=require('../webmail.js');
+  const d=new JSDOM('<h1 id="subject">Mail A</h1><div id="mailContentContainer">Body A</div>',{url:'https://mail.qq.com/'}).window.document;
+  const p=await panel(()=>webmail.capture(d,async()=>new Response('Unavailable',{status:503})));t.after(p.close);
+  await p.change({id:1,url:d.location.href});
+  p.validation(msg=>webmail.validateTarget(d,msg.target,false));
+  p.result({status:'unavailable'});
+  p.get('mail-save-button').click();await p.flush();
+  p.get('mail-excerpt-accept').click();await p.flush();
+  assert.equal(p.get('mail-excerpt-offer').hidden,false);
+  d.querySelector('#subject').textContent='Mail B';
+  d.querySelector('#mailContentContainer').textContent='Body B';
+  p.result({status:'saved'});
+  p.get('mail-excerpt-accept').click();await p.flush();
+  assert.equal(p.calls.filter(c=>c.msg.type==='DESKTOP_SAVE_MAIL').length,1);
+  assert.equal(p.get('mail-excerpt-offer').hidden,true);
+  assert.match(p.get('mail-save-status').textContent,/邮件已切换/);
 });

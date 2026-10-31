@@ -132,7 +132,7 @@
     return chrome.runtime.sendMessage({ type: 'DESKTOP_SAVE_MAIL', kind, ...data, applicationId: applicationId || null });
   }
   async function validateTarget(tab, capture, consume = true) {
-    if (self.ResumeProWebmail.provider(tab.url) !== 'gmail') return true;
+    if (self.ResumeProWebmail.provider(tab.url) !== 'gmail' && capture.status === 'original') return true;
     if (typeof capture.target !== 'string' || !capture.target) return false;
     const result = await chrome.tabs.sendMessage(tab.id, { type: consume ? 'WEBMAIL_VALIDATE' : 'WEBMAIL_CHECK', target: capture.target }, { frameId: 0 });
     const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -150,7 +150,7 @@
     // Acceptance consumed the binding before transfer. Never leave a retry
     // button wired to that spent Gmail target. Other providers can retry the
     // unchanged proposal, unless its tab or archive has changed in the meantime.
-    if (chosen.target || result?.status === 'archive_changed' || pending !== chosen) clearOffer();
+    if (chosen.oneUse || result?.status === 'archive_changed' || pending !== chosen) clearOffer();
     const reason = result?.status !== 'unavailable' ? errors[result?.status] : '';
     const retry = pending === chosen
       ? '连接恢复后可再次点击「保存网页摘录」重试。'
@@ -177,7 +177,7 @@
         say('正在传给桌面并保存原件…');
         saved(await send('eml', { bytesBase64: capture.bytesBase64 }, selected), 'eml');
       } else if (capture?.status === 'excerpt_offer') {
-        pending = { excerpt: capture.excerpt, target: capture.target, tab };
+        pending = { excerpt: capture.excerpt, target: capture.target, tab, oneUse: self.ResumeProWebmail.provider(tab.url) === 'gmail' };
         document.getElementById('mail-excerpt-subject').textContent = capture.excerpt.subject;
         offer.hidden = false;
         card.dataset.excerptOffer = 'true';
@@ -195,7 +195,7 @@
     let sending = false;
     try {
       const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (front?.id !== chosen.tab.id || front?.url !== chosen.tab.url || !await validateTarget(chosen.tab, chosen) || pending !== chosen) {
+      if (front?.id !== chosen.tab.id || front?.url !== chosen.tab.url || !await validateTarget(chosen.tab, chosen, chosen.oneUse) || pending !== chosen) {
         clearOffer(); say(errors.changed, 'error'); return;
       }
       sending = true;
