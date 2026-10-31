@@ -282,6 +282,22 @@ test('the page\'s local matches and the worker do not take a WeChat or QQ number
   }
 });
 
+// 分组名里有「证件」「手机」：排在前面的准考证号、微信不能填进证件号码和手机。
+test('the page\'s local matches and the worker do not fill an admission ticket or WeChat number by its group name', async () => {
+  const profile = require('../profile-fields.js');
+  const formFields = [{ fieldId: 'name', label: '姓名' }, { fieldId: 'id', label: '证件号码' },
+    { fieldId: 'phone', label: '手机号码' }, { fieldId: 'school', label: '学校' }];
+  const resumeFields = [{ group: '基本信息', key: '姓名', value: '测试用户' },
+    { group: '证件信息', key: '准考证号', value: '110105123456' }, { group: '证件信息', key: '身份证号', value: '110101199003071234' },
+    { group: '手机与微信', key: '微信', value: '13911112222' }, { group: '手机与微信', key: '手机', value: '13800138000' },
+    { group: '教育背景', key: '学校', value: '大学乙' }];
+  const expected = [{ fieldId: 'name', value: '测试用户' }, { fieldId: 'id', value: '110101199003071234' }, { fieldId: 'phone', value: '13800138000' }];
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  const result = await env.run({ formFields, resumeFields });
+  assert.deepEqual(helpers.localRuleMatches(formFields, resumeFields, profile), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.matches)), expected);
+});
+
 // #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
 test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
   const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));

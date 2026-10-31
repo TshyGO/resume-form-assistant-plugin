@@ -472,6 +472,25 @@ test("rules: a description that mentions 女 is not taken for the gender", () =>
   assert.deepEqual(ruleValues([textField("name", "姓名"), textField("gender", "性别")], resume), { name: "测试用户", gender: "女" });
 });
 
+// 字段名认得出类别时分组名也不算：「证件信息」下的准考证号、「手机与微信」下的微信、「姓名与性别」下的姓名排在前面，
+// 都不能因为分组名填进证件号码、手机、性别。字段名认不出的「号码1」照旧看分组名和值。
+test("rules: a group name does not turn a named field of another kind into the ID, phone or gender", () => {
+  const forms = [textField("gender", "性别"), textField("name", "姓名"), textField("id", "证件号码"), textField("phone", "手机号码")];
+  assert.deepEqual(ruleValues(forms, [
+    { group: "证件信息", key: "准考证号", value: "110105123456" },
+    { group: "证件信息", key: "身份证号", value: "110101199003071234" },
+    { group: "手机与微信", key: "微信", value: "13911112222" },
+    { group: "手机与微信", key: "手机", value: "13800138000" },
+    { group: "姓名与性别", key: "姓名", value: "李亚男" },
+    { group: "姓名与性别", key: "性别", value: "女" }
+  ]), { gender: "女", name: "李亚男", id: "110101199003071234", phone: "13800138000" });
+
+  assert.deepEqual(ruleValues([textField("id", "证件号码"), textField("phone", "手机号码")], [
+    { group: "证件信息", key: "号码1", value: "110101199003071234" },
+    { group: "手机与微信", key: "号码1", value: "13800138000" }
+  ]), { id: "110101199003071234", phone: "13800138000" });
+});
+
 // 以前证件类型、学历、学位、年月这类下拉框被挡在 AI 外面，本地规则又不处理，永远填不上。
 test("worker: choice fields the rules cannot fill are sent to AI with their options", async () => {
   let body = null;
