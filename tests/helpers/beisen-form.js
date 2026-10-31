@@ -64,13 +64,18 @@ function selectItem(id, label, top, { selected = "" } = {}) {
   </div></div>`;
 }
 
-// rows：列表是虚拟滚动，只画出一屏；loadMs：字典第一次点开时要拉这么久；extra：弹层里另外放的元素。
-function wireSelect(doc, id, { choices = ["汉族", "回族", "满族"], rows = 9, loadMs = 0, extra = "" } = {}) {
+// rows：列表是虚拟滚动，只画出一屏；loadMs：字典第一次点开时要拉这么久（Infinity：请求失败，加载图标一直转）；
+// extra：弹层里另外放的元素。列表为空时写「这里什么都没有...」。
+// tree：两级字典（{ 省: [学校] }）：第一屏是省，没有单选圈；搜索结果是学校，名字后面一行写上级名称（div.item-text-fullname）。
+// searchMs：搜索交给后台（学校名称）：防抖 400ms 后请求，再过这么久结果才回来；回来之前左侧是上一次的结果（一开始为空）。
+function wireSelect(doc, id, { choices = ["汉族", "回族", "满族"], rows = 9, loadMs = 0, extra = "", tree = null, searchMs } = {}) {
   const item = doc.getElementById(id);
   const root = item.querySelector(".phoenix-select");
   const shown = root.querySelector(".phoenix-select__selected");
   const top = Number(item.querySelector(".form-item").getAttribute("data-rect").split(",")[0]);
   const searches = [], events = [];
+  // choices 可以在接上之后再往里加（按上一题加载的城市），每次画的时候再读。
+  const leaves = () => tree ? Object.entries(tree).flatMap(([parent, names]) => names.map((name) => ({ name, parent }))) : choices.map((name) => ({ name }));
   let loaded = !loadMs;
   root.addEventListener("click", () => {
     if (doc.querySelector(".constant-main-selector-container")) return;
@@ -87,18 +92,25 @@ function wireSelect(doc, id, { choices = ["汉族", "回族", "满族"], rows = 
       </div></div></div></div>`;
     const left = layer.querySelector(".left-container"), right = layer.querySelector(".select-data-container");
     const search = layer.querySelector(".content-search input");
+    let results = [], pending = null;
     const chunks = (name) => !word ? `<span>${name}</span>`
       : name.split(word).map((part) => (part ? `<span>${part}</span>` : "")).join(`<mark class="item-label-highLightCls">${word}</mark>`);
+    const row = (leaf) => leaf.branch
+      ? `<div><div class="list-item-container"><span class="item-text-label"><span>${chunks(leaf.name)}</span></span><svg class="arrow-icon"></svg></div></div>`
+      : `<div><div class="list-item-container">`
+        + `<span class="icon-container"><svg class="${leaf.name === picked ? "RadioChecked" : "RadioUnchecked"}" data-name="${leaf.name}"></svg></span>`
+        + `<span class="item-text-label no-hover"><span>${chunks(leaf.name)}</span></span>`
+        + `${word && leaf.parent ? `<div class="item-text-fullname">${leaf.parent}</div>` : ""}</div></div>`;
     const renderLeft = () => {
       if (!loaded) {
         left.innerHTML = `<div class="psd_page-loading psd_page-loading-mask"><div class="psd_page-loading-icon-wrapper"><svg class="psd_page-loading-icon"></svg></div></div>`;
         return;
       }
-      const list = word ? choices.filter((name) => name.includes(word)) : choices;
+      const list = !word ? (tree ? Object.keys(tree).map((name) => ({ name, branch: true })) : leaves())
+        : searchMs === undefined ? leaves().filter((leaf) => leaf.name.includes(word)) : results;
       const head = word ? `<div class="left-search-result">搜索结果${list.length}个</div>` : `<div class="breadcrumb"><span>全部</span></div>`;
-      left.innerHTML = `${head}<div class="list-data-container">${list.slice(0, rows).map((name) => `<div><div class="list-item-container">`
-        + `<span class="icon-container"><svg class="${name === picked ? "RadioChecked" : "RadioUnchecked"}" data-name="${name}"></svg></span>`
-        + `<span class="item-text-label no-hover"><span>${chunks(name)}</span></span></div></div>`).join("")}</div>`;
+      left.innerHTML = `${head}<div class="list-data-container">${list.length ? list.slice(0, rows).map(row).join("")
+        : `<div class="no-data">这里什么都没有...</div>`}</div>`;
     };
     const renderRight = () => {
       layer.querySelector(".select-data-num-text").textContent = picked ? "1/" : "0/";
@@ -114,14 +126,24 @@ function wireSelect(doc, id, { choices = ["汉族", "回族", "满族"], rows = 
     });
     layer.querySelector(".ok").addEventListener("click", () => { events.push("ok"); shown.textContent = picked; close(); });
     layer.querySelector(".cancel").addEventListener("click", () => { events.push("cancel"); close(); });
-    search.addEventListener("input", () => { searches.push(search.value); word = search.value; renderLeft(); });
+    search.addEventListener("input", () => {
+      searches.push(search.value); word = search.value; renderLeft();
+      if (searchMs === undefined) return;
+      const asked = word;
+      doc.defaultView.clearTimeout(pending);
+      pending = doc.defaultView.setTimeout(() => {
+        if (asked !== word) return;
+        results = leaves().filter((leaf) => leaf.name.includes(asked));
+        if (layer.isConnected) renderLeft();
+      }, 400 + searchMs);
+    });
     // Esc 不管用，点弹层外面才关。
     const outside = (event) => { if (!layer.contains(event.target) && !root.contains(event.target)) close(); };
     const close = () => { layer.remove(); doc.removeEventListener("mousedown", outside, true); };
     doc.addEventListener("mousedown", outside, true);
     renderLeft(); renderRight();
     doc.body.append(layer);
-    if (!loaded) doc.defaultView.setTimeout(() => { loaded = true; if (layer.isConnected) renderLeft(); }, loadMs);
+    if (!loaded && Number.isFinite(loadMs)) doc.defaultView.setTimeout(() => { loaded = true; if (layer.isConnected) renderLeft(); }, loadMs);
   });
   return { searches, events, shown: () => shown.textContent };
 }

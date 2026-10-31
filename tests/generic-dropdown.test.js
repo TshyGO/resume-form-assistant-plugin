@@ -1016,13 +1016,119 @@ test("a box seen as a dropdown that never opens anything is reported, not typed 
   assert.equal(h.doc.querySelector("input").value, "", "the trial text is put back");
 });
 
-// 北森 2022 版常量选择器（见 helpers/beisen-form.js），控件层按正式的等待时长。
-function constantSelector(label, options) {
+// 北森 2022 版常量选择器（见 helpers/beisen-form.js），控件层按正式的等待时长；timing 可以把等待调短。
+function constantSelector(label, options, timing = {}) {
   const h = load(selectItem("f1", label, 100));
   const select = wireSelect(h.doc, "f1", options);
-  const api = h.w.ResumeProControls.create({ settleMs: 35, isVisible: (el) => !el.closest("[hidden]") });
+  const api = h.w.ResumeProControls.create({ settleMs: 35, ...timing, isVisible: (el) => !el.closest("[hidden]") });
   return { ...h, ...select, api, target: scanned(h.doc, label) };
 }
+
+// 北森学校名称：两级字典（省 → 学校），只有学校能选。
+const SCHOOLS = { 北京市: ["北京示例学院", "首都示例大学"], 湖北省: ["示例大学", "江汉示例学院"], 广东省: ["岭南示例大学"] };
+
+test("Beisen school search answered by the server: 搜索结果0个 shown before the results arrive is waited out", async () => {
+  // #301 kotei.zhiye.com：学校名称的搜索交给后台（防抖 400ms 后请求），结果回来之前左侧先显示「搜索结果0个」「这里什么都没有...」。
+  // 原来把这两行当成选项，打字后约 80ms 就报没有匹配的选项。
+  const h = constantSelector("学校名称", { tree: SCHOOLS, searchMs: 300 });
+  const result = await h.api.operate(h.target, "示例大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.searches, ["示例大学"]);
+  assert.deepEqual(h.events, ["radio:示例大学", "ok"]);
+  assert.equal(h.shown(), "示例大学");
+});
+
+test("Beisen two-level search results with the parent name under each row: the row's radio is clicked, not the text", async () => {
+  // 搜索结果每行名字后面多一行上级名称（item-text-fullname），条目只取到名字那层，单选圈在旁边。
+  // 原来点了文字，北森叶子项点文字不响应，报选项选择未提交。
+  const h = constantSelector("学校名称", { tree: SCHOOLS });
+  const result = await h.api.operate(h.target, "示例大学");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.events, ["radio:示例大学", "ok"]);
+  assert.equal(h.shown(), "示例大学");
+});
+
+test("a school the server does not have is still reported as no matching option once the wait is over", async () => {
+  const h = constantSelector("学校名称", { tree: SCHOOLS, searchMs: 100 });
+  const result = await h.api.operate(h.target, "不存在示例学院");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "no_option_match", JSON.stringify(result));
+  assert.deepEqual(h.events, []);
+  assert.equal(h.shown(), "");
+});
+
+// 点开时把 html 挂到 body 下的下拉：记下点到的单选圈（radio:名字）或文字，点单选圈就选上；在外面按下就收起。
+function rowsLayer(label, html) {
+  const h = load(selectItem("f1", label, 100));
+  const root = h.doc.querySelector(".phoenix-select");
+  const shown = root.querySelector(".phoenix-select__selected");
+  const clicks = [];
+  root.addEventListener("click", () => {
+    if (h.doc.querySelector(".rows-layer")) return;
+    const layer = h.doc.createElement("div");
+    layer.className = "rows-layer";
+    layer.innerHTML = html;
+    layer.addEventListener("click", (event) => {
+      const name = event.target.getAttribute("data-name");
+      clicks.push(name ? `radio:${name}` : event.target.textContent);
+      if (name) shown.textContent = name;
+    });
+    const outside = (event) => { if (!layer.contains(event.target) && !root.contains(event.target)) { layer.remove(); h.doc.removeEventListener("mousedown", outside, true); } };
+    h.doc.addEventListener("mousedown", outside, true);
+    h.doc.body.append(layer);
+  });
+  return { ...h, clicks, shown: () => shown.textContent, target: scanned(h.doc, label) };
+}
+
+test("a radio beside the row is clicked only for the row's own name, never for the parent line or a neighbour", async () => {
+  // 上级名称那一行正好是要填的值：这一行的单选圈是学校的，不点它，只点文字；选不上按没选上报，不写别的值。
+  const school = (name, parent) => `<div class="row"><div class="cell"><span class="icon"><svg class="RadioUnchecked" data-name="${name}"></svg></span>`
+    + `<span class="label">${name}</span><div class="fullname">${parent}</div></div></div>`;
+  // 一行里的分类没有单选圈、旁边的条目有：分类不借旁边那一项的圈。
+  const mixed = `<div class="row"><div class="cell"><span class="label">其他类别</span><svg class="arrow"></svg></div>`
+    + `<div class="cell"><span class="icon"><svg class="RadioUnchecked" data-name="示例类别"></svg></span><span class="label">示例类别</span></div></div>`
+    + `<div class="row"><div class="cell"><span class="label">第三类别</span></div></div>`;
+  // 圈在条目后面、后面紧跟着另一个条目：圈是后面那一项的，前面没有圈的条目不借。
+  const flat = `<div class="row"><span class="label">其他类别</span><svg class="RadioUnchecked" data-name="示例类别"></svg><span class="label">示例类别</span></div>`
+    + `<div class="row"><span class="label">第三类别</span></div>`;
+  for (const [html, wanted] of [[school("江汉示例学院", "湖北省") + school("北京示例学院", "北京市"), "湖北省"], [mixed, "其他类别"], [flat, "其他类别"]]) {
+    const h = rowsLayer("学校名称", `<div class="list">${html}</div>`);
+    const result = await h.api.operate(h.target, wanted);
+    assert.equal(result.ok, false);
+    assert.deepEqual(h.clicks, [wanted]);
+    assert.equal(h.shown(), "");
+  }
+});
+
+test("a Beisen dictionary still loading after the usual wait is waited for longer, without typing into its search box", async () => {
+  // #301 kotei：字典超过约 4 秒才回来时，原来第一轮等到点就去搜索，搜索后再等一轮，报等待选项更新超时。
+  // 弹层里还显示着加载图标时接着等，最多等到平常的 4 倍（正式 8 秒），加载中不去搜索。这里把等待调到 300ms。
+  const h = constantSelector("民族", { choices: ETHNIC, loadMs: 700 }, { timeoutMs: 300 });
+  const result = await h.api.operate(h.target, "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.events, ["radio:回族", "ok"]);
+  assert.deepEqual(h.searches, []);
+});
+
+// 弹层里一直留着一个不带字的加载图标（列表底部的懒加载标记），列表已经在了：不延长等待，照常从列表里选。
+test("a list already shown next to a loading mark that never goes away is still picked from", async () => {
+  const h = constantSelector("民族", { choices: ETHNIC, extra: `<div class="list-bottom-loading"></div>` }, { timeoutMs: 300 });
+  const started = Date.now();
+  const result = await h.api.operate(h.target, "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.events, ["radio:回族", "ok"]);
+  assert.ok(Date.now() - started < 1100, `waited ${Date.now() - started}ms`);
+});
+
+test("a Beisen dictionary that never finishes loading times out without typing into its search box", async () => {
+  const h = constantSelector("民族", { choices: ETHNIC, loadMs: Infinity }, { timeoutMs: 300 });
+  const started = Date.now();
+  const result = await h.api.operate(h.target, "回族");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "options_timeout", JSON.stringify(result));
+  assert.deepEqual(h.searches, []);
+  assert.ok(Date.now() - started >= 1100, `waited ${Date.now() - started}ms`);
+});
 
 test("options that load a moment after opening are waited for instead of jumping to the search box", async () => {
   // 2026-10-22 金发真机：页面刚打开时第一次点开「民族」，选项还在加载，原来立刻改去搜索框输入，等不到就失败。
