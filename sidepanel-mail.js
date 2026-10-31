@@ -30,6 +30,7 @@
   const errors = {
     open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
     multiple_messages: '当前会话展开了多封邮件，请只展开要保存的一封后重试。',
+    message_clipped: '正文被 Gmail 截断，不能保存为完整摘录。请在该封邮件菜单打开“显示原始邮件”后保存原件，或下载 .eml 在桌面导入。',
     account_unavailable: '无法确认当前 Gmail 账号，请刷新邮箱后重试，或下载 .eml 在桌面导入。',
     original_unavailable: '未取得完整邮件原件，请使用 Gmail 的下载原始邮件后在桌面导入。',
     unrecognized_mail: '检测到邮件标题，但无法确认当前邮件的完整阅读区域。请等待加载完成后重试；仍失败时可下载 .eml 在桌面导入。',
@@ -130,10 +131,10 @@
   async function send(kind, data, applicationId) {
     return chrome.runtime.sendMessage({ type: 'DESKTOP_SAVE_MAIL', kind, ...data, applicationId: applicationId || null });
   }
-  async function validateTarget(tab, capture) {
+  async function validateTarget(tab, capture, consume = true) {
     if (self.ResumeProWebmail.provider(tab.url) !== 'gmail') return true;
     if (typeof capture.target !== 'string' || !capture.target) return false;
-    const result = await chrome.tabs.sendMessage(tab.id, { type: 'WEBMAIL_VALIDATE', target: capture.target }, { frameId: 0 });
+    const result = await chrome.tabs.sendMessage(tab.id, { type: consume ? 'WEBMAIL_VALIDATE' : 'WEBMAIL_CHECK', target: capture.target }, { frameId: 0 });
     const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
     return front?.id === tab.id && front?.url === tab.url && result?.status === 'current';
   }
@@ -153,9 +154,13 @@
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id || tab.id !== current?.id || tab.url !== current?.url) { await refresh(); say(errors.changed); return; }
-      const capture = await chrome.tabs.sendMessage(tab.id, { type: 'WEBMAIL_CAPTURE' }, { frameId: 0 });
+      let capture = await chrome.tabs.sendMessage(tab.id, { type: 'WEBMAIL_CAPTURE' }, { frameId: 0 });
       const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (front?.id !== tab.id || front?.url !== tab.url) { say(errors.changed); return; }
+      if (capture?.status === 'gmail_source') {
+        const source = capture;
+        capture = await self.ResumeProGmailDownload.resolveSource(source, consume => validateTarget(tab, source, consume));
+      }
       if (capture?.status === 'original') {
         if (!await validateTarget(tab, capture)) { say(errors.changed, 'error'); return; }
         say('正在传给桌面并保存原件…');

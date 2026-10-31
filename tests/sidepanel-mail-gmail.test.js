@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
-async function panel(capture = { status: 'original', bytesBase64: 'eA==', target: 'opaque-target' }) {
+async function panel(capture = { status: 'original', bytesBase64: 'eA==', target: 'opaque-target' }, download = async () => ({ status: 'original', kind: 'eml', bytesBase64: 'eA==' })) {
   const dom = new JSDOM(fs.readFileSync('sidepanel.html', 'utf8'), { url: 'chrome-extension://own/sidepanel.html', runScripts: 'outside-only' });
   let tab = { id: 1, url: 'https://mail.google.com/mail/u/0/#inbox/thread' };
   let validation = { status: 'current' }, result = { status: 'saved' };
@@ -11,11 +11,16 @@ async function panel(capture = { status: 'original', bytesBase64: 'eA==', target
   dom.window.chrome = {
     tabs: { query: async () => [tab], sendMessage: async (id, msg) => {
       calls.push({ destination: 'page', id, msg });
-      return msg.type === 'WEBMAIL_VALIDATE' ? typeof validation === 'function' ? validation() : validation : capture;
+      return ['WEBMAIL_VALIDATE', 'WEBMAIL_CHECK'].includes(msg.type) ? typeof validation === 'function' ? validation() : validation : capture;
     }, onActivated: { addListener: fn => { handlers.activate = fn; } }, onUpdated: { addListener: fn => { handlers.update = fn; } } },
     runtime: { sendMessage: async msg => { calls.push({ destination: 'desktop', msg }); return result; } }
   };
-  for (const file of ['webmail.js', 'sidepanel-mail.js']) vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext());
+  vm.runInContext(fs.readFileSync('webmail.js', 'utf8'), dom.getInternalVMContext());
+  const transport = require('../gmail-download.js');
+  dom.window.ResumeProGmailDownload = { resolveSource: (source, validate) => transport.resolveSource(source, async url => {
+    calls.push({ destination: 'download', url }); return download(url);
+  }, validate) };
+  vm.runInContext(fs.readFileSync('sidepanel-mail.js', 'utf8'), dom.getInternalVMContext());
   const flush = async () => { for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve)); };
   await flush();
   return { get: id => dom.window.document.getElementById(id), calls, flush,
@@ -24,6 +29,35 @@ async function panel(capture = { status: 'original', bytesBase64: 'eA==', target
     close: () => dom.window.close() };
 }
 const excerpt = { status: 'excerpt_offer', target: 'opaque-target', excerpt: { subject: '星河面试', from: 'hr@example.test', sentTime: '周五', body: '周四面试' } };
+const source = { status: 'gmail_source', target: 'opaque-target', originals: ['https://mail.google.com/mail/u/0/?view=att&th=18abcdef12345678&attid=0&disp=comp'], fallback: 'excerpt_offer', excerpt: excerpt.excerpt };
+
+test('Gmail source downloads between target checks, consumes only before archive transfer, and sends no private URL', async t => {
+  const p = await panel(source); t.after(p.close);
+  assert.equal(p.calls.length, 0);
+  p.get('mail-save-button').click(); await p.flush();
+  assert.deepEqual(p.calls.map(call => call.msg?.type || call.destination), ['WEBMAIL_CAPTURE', 'WEBMAIL_CHECK', 'download', 'WEBMAIL_CHECK', 'WEBMAIL_VALIDATE', 'DESKTOP_SAVE_MAIL']);
+  const save = p.calls.at(-1).msg;
+  assert.equal(save.bytesBase64, 'eA=='); assert.equal(save.originals, undefined); assert.equal(save.target, undefined);
+  assert.match(p.get('mail-save-status').textContent, /已保存完整邮件/);
+});
+test('switching accounts during the Gmail download prevents archive writes', async t => {
+  let finish;
+  const p = await panel(source, () => new Promise(resolve => { finish = resolve; })); t.after(p.close);
+  p.get('mail-save-button').click(); await p.flush();
+  await p.change({ id: 1, url: 'https://mail.google.com/mail/u/1/#inbox/other' });
+  finish({ status: 'original', bytesBase64: 'eA==' }); await p.flush();
+  assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 0);
+  assert.match(p.get('mail-save-status').textContent, /邮件已切换/);
+});
+test('failed Gmail source offers an excerpt without consuming its target until explicit acceptance', async t => {
+  const p = await panel(source, async () => ({ status: 'unavailable' })); t.after(p.close);
+  p.get('mail-save-button').click(); await p.flush();
+  assert.equal(p.get('mail-excerpt-offer').hidden, false);
+  assert.equal(p.calls.some(call => call.msg?.type === 'WEBMAIL_VALIDATE'), false);
+  p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.calls.filter(call => call.destination === 'desktop').length, 1);
+  assert.equal(p.calls.at(-2).msg.kind, 'excerpt');
+});
 
 test('Gmail URL enables saving without reading mail; explicit save validates the target before desktop transfer', async t => {
   const p = await panel(); t.after(p.close);

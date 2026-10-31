@@ -7,7 +7,7 @@
       const u = new URL(url);
       if (u.protocol !== 'https:') return null;
       if (['mail.qq.com', 'wx.mail.qq.com'].includes(u.hostname)) return 'qq';
-      if (['mail.google.com', 'mail.googlemail.com'].includes(u.hostname) && /^\/mail\/u\/\d{1,3}\/$/.test(u.pathname)) return 'gmail';
+      if (['mail.google.com', 'mail.googlemail.com'].includes(u.hostname) && /^\/mail\/u\/\d{1,3}\/?$/.test(u.pathname)) return 'gmail';
       if (['163', '126'].some(n => u.hostname === `mail.${n}.com` || u.hostname.endsWith(`.mail.${n}.com`))) return 'netease';
     } catch {}
     return null;
@@ -115,8 +115,8 @@
   function gmailRoute(doc) {
     try {
       const url = new URL(doc.location.href);
-      const path = /^\/mail\/u\/(\d{1,3})\/$/.exec(url.pathname);
-      return provider(url.href) === 'gmail' && path ? { url, index: path[1], path: url.pathname } : null;
+      const path = /^\/mail\/u\/(\d{1,3})\/?$/.exec(url.pathname);
+      return provider(url.href) === 'gmail' && path ? { url, index: path[1], path: `/mail/u/${path[1]}/` } : null;
     } catch { return null; }
   }
   function gmailIds(node) {
@@ -138,7 +138,7 @@
     let url;
     try { url = new URL(link.getAttribute('href'), ctx.doc.location.href); } catch { return null; }
     const route = gmailRoute(ctx.doc);
-    if (!route || url.origin !== route.url.origin || url.pathname !== route.path || url.username || url.password) return null;
+    if (!route || url.origin !== route.url.origin || url.pathname.replace(/\/$/, '') + '/' !== route.path || url.username || url.password) return null;
     const allowed = new Set(['ui', 'ik', 'view', 'th', 'permmsgid', 'authuser', 'attid', 'disp', 'safe', 'zw', 'd']);
     const counts = new Set();
     for (const key of url.searchParams.keys()) {
@@ -149,13 +149,15 @@
     if (user && user !== route.index && user.toLowerCase() !== ctx.account) return null;
     // Only the message's raw source, never a single attachment or an action.
     const view = url.searchParams.get('view');
-    if (view !== 'om' && !(view === 'att' && url.searchParams.get('attid') === '0' && url.searchParams.get('disp') === 'comp')) return null;
-    if (view === 'om' && url.searchParams.has('attid')) return null;
+    if (view !== 'att' || url.searchParams.get('attid') !== '0' || url.searchParams.get('disp') !== 'comp') return null;
     const ids = gmailMessageIds(ctx.ids);
     if (!ids) return null;
     const legacy = url.searchParams.get('th');
     const perm = url.searchParams.get('permmsgid');
     if ((!legacy && !perm) || (legacy && !ids.has(legacy.toLowerCase())) || (perm && perm !== ctx.ids.perm)) return null;
+    // Gmail's own no-slash link 301s to this equivalent same-account path.
+    // Normalize it before the restricted extension downloader handles redirects.
+    url.pathname = route.path;
     return url.href;
   }
   function gmailAccount(doc, main) {
@@ -172,9 +174,37 @@
     }
     return accounts.size === 1 ? [...accounts][0] : null;
   }
+  function gmailFullMessage(doc, route) {
+    const legacy = route.url.searchParams.get('th') || '', perm = route.url.searchParams.get('permmsgid') || '';
+    const ids = { legacy: /^[a-f0-9]{12,32}$/i.test(legacy) ? legacy.toLowerCase() : '', perm: /^msg-[af]:[\w-]{1,128}$/.test(perm) ? perm : '' };
+    if ((!ids.legacy && !ids.perm) || !gmailMessageIds(ids)) return { status: 'unrecognized_mail' };
+    const mains = [...doc.querySelectorAll('body > .bodycontainer > .maincontent')].filter(shown);
+    if (mains.length !== 1) return { status: 'unrecognized_mail' };
+    const main = mains[0], tables = [...main.children].filter(node => node.tagName === 'TABLE');
+    const messages = tables.filter(node => node.classList.contains('message') && shown(node));
+    if (messages.length > 1) return { status: 'multiple_messages' };
+    const titleTables = tables.filter(node => !node.classList.contains('message'));
+    if (messages.length !== 1 || titleTables.length !== 1) return { status: 'unrecognized_mail' };
+    const title = titleTables[0].querySelector('font[size="+1"]'), message = messages[0];
+    const header = message.rows[0]?.cells, cell = message.rows[2]?.cells[0];
+    if (!title || !text(title) || header?.length !== 2 || header[1].getAttribute('align') !== 'right' || !cell) return { status: 'unrecognized_mail' };
+    const layout = [...cell.children].filter(node => node.tagName === 'TABLE' && node.getAttribute('cellpadding') === '12');
+    const content = layout.length === 1 ? layout[0].rows[0]?.cells[0] : null;
+    const bodies = content ? [...content.children].filter(node => node.tagName === 'DIV' && node.style.overflow === 'hidden') : [];
+    if (bodies.length !== 1 || !text(bodies[0])) return { status: 'unrecognized_mail' };
+    const owner = doc.querySelector('body > .bodycontainer > table');
+    const accounts = new Set((text(owner).match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).map(x => x.toLowerCase()));
+    if (accounts.size !== 1) return { status: 'account_unavailable' };
+    const account = [...accounts][0], body = bodies[0];
+    const data = { subject: text(title), from: text(header[0]), sentTime: text(header[1]), body: bodyText(body) };
+    const ctx = { doc, body, title, ids, account, data, links: [], clipped: false };
+    ctx.fingerprint = JSON.stringify([route.url.href, account, ids, data]);
+    return { ctx };
+  }
   function inspectGmail(doc) {
     const route = gmailRoute(doc);
     if (!route) return { status: 'unrecognized_mail' };
+    if (route.url.searchParams.get('view') === 'lg') return gmailFullMessage(doc, route);
     if (route.url.searchParams.get('view') === 'om') {
       const legacy = route.url.searchParams.get('th') || '';
       const perm = route.url.searchParams.get('permmsgid') || '';
@@ -213,8 +243,18 @@
       .filter(link => shown(link) && !link.closest('.a3s') && (link.hasAttribute('download') || /download.*(?:message|original)|show original|下载邮件|下載郵件|显示原始邮件|顯示原始郵件/i.test(text(link))));
     const data = { subject: text(titles[0]), from: from[0].getAttribute('email').trim(),
       sentTime: times[0].getAttribute('title') || text(times[0]), body: bodyText(body) };
-    const ctx = { doc, body, title: titles[0], data, ids, account, links };
-    ctx.fingerprint = JSON.stringify([route.url.href, account, ids, data]);
+    const messageIds = gmailMessageIds(ids);
+    const clipped = [...card.querySelectorAll('a[href]')].some(link => {
+      if (!shown(link)) return false;
+      try {
+        const url = new URL(link.href, doc.location.href);
+        if (url.origin !== route.url.origin || url.pathname.replace(/\/$/, '') + '/' !== route.path || url.searchParams.get('view') !== 'lg') return false;
+        const perm = url.searchParams.get('permmsgid'), legacy = url.searchParams.get('th');
+        return Boolean((perm && perm === ids.perm) || (legacy && messageIds.has(legacy.toLowerCase())));
+      } catch { return false; }
+    });
+    const ctx = { doc, body, title: titles[0], data, ids, account, links, clipped };
+    ctx.fingerprint = JSON.stringify([route.url.href, account, ids, data, clipped]);
     return { ctx };
   }
   function rememberGmail(ctx, result) {
@@ -222,10 +262,10 @@
     gmailTarget = { doc: ctx.doc, target, fingerprint: ctx.fingerprint, body: ctx.body, title: ctx.title };
     return { ...result, target };
   }
-  function validateGmail(doc, target) {
+  function validateGmail(doc, target, consume = true) {
     if (!gmailTarget || gmailTarget.doc !== doc || gmailTarget.target !== target) return { status: 'changed' };
     const snapshot = gmailTarget;
-    gmailTarget = null; // One-use binding; do not retain mail after acceptance.
+    if (consume) gmailTarget = null; // Acceptance consumes the one-use binding.
     const current = inspectGmail(doc).ctx;
     return { status: current && current.body === snapshot.body && current.title === snapshot.title
       && current.fingerprint === snapshot.fingerprint ? 'current' : 'changed' };
@@ -289,7 +329,18 @@
     return u.href;
   }
   function rawCandidates(ctx, name) {
-    if (name === 'gmail') return [...new Set(ctx.links.map(link => gmailRawUrl(link, ctx)).filter(Boolean))];
+    if (name === 'gmail') {
+      const urls = ctx.links.map(link => gmailRawUrl(link, ctx)).filter(Boolean);
+      const ids = gmailMessageIds(ctx.ids), route = gmailRoute(ctx.doc);
+      if (route && ids?.size === 1) {
+        // Native Gmail's verified whole-message download route. It needs only
+        // this card's message ID/account path, never a Cookie or hidden token.
+        const url = new URL(route.path, route.url.origin);
+        url.search = new URLSearchParams({ view: 'att', th: [...ids][0], attid: '0', disp: 'comp', safe: '1', zw: '' }).toString();
+        urls.push(url.href);
+      }
+      return [...new Set(urls)];
+    }
     const origin = ctx.doc.location.origin;
     const sourceUrls = ctx.sourceUrls || contexts(ctx.doc, ctx.body);
     const urls = ctx.links.filter(link => /下载邮件|导出邮件|导出为\s*eml\s*文件|下载原文|保存邮件|download.*(?:mail|message)|original/i
@@ -405,6 +456,13 @@
     };
     let reason = 'raw_unavailable';
     const candidates = rawCandidates(ctx, name);
+    if (name === 'gmail' && candidates.length) {
+      const fits = new TextEncoder().encode(ctx.data.body).length <= MAX_EXCERPT && ctx.data.subject.length <= 500
+        && ctx.data.from.length <= 500 && ctx.data.sentTime.length <= 200;
+      const fallback = ctx.originalPage ? 'original_unavailable' : ctx.clipped ? 'message_clipped' : fits ? 'excerpt_offer' : 'too_large';
+      return rememberGmail(ctx, { status: 'gmail_source', originals: candidates.slice(0, 3), subject: ctx.data.subject,
+        fallback, excerpt: fallback === 'excerpt_offer' ? ctx.data : undefined });
+    }
     const current = new URL(doc.location.href);
     if (name === 'qq' && current.hostname === 'wx.mail.qq.com' && current.pathname === '/home/index') {
       const modern = await qqModernOriginal(doc, requestQQ);
@@ -428,13 +486,14 @@
     }
     if (!unchanged()) return { status: 'changed' };
     if (ctx.originalPage) return { status: 'original_unavailable' };
+    if (ctx.clipped) return { status: 'message_clipped' };
     if (new TextEncoder().encode(ctx.data.body).length > MAX_EXCERPT || ctx.data.subject.length > 500
         || ctx.data.from.length > 500 || ctx.data.sentTime.length > 200) return { status: 'too_large' };
     // This is a proposal only. The user must explicitly accept saving an excerpt in the side panel.
     const result = { status: 'excerpt_offer', reason, excerpt: ctx.data };
     return name === 'gmail' ? rememberGmail(ctx, result) : result;
   }
-  const api = { provider, capture, opened, rawCandidates, looksLikeMail, readBounded, validateGmail, discardGmail, MAX_BYTES };
+  const api = { provider, capture, opened, rawCandidates, looksLikeMail, readBounded, base64, validateGmail, discardGmail, MAX_BYTES };
   root.ResumeProWebmail = api;
   try {
     if (typeof module === 'object' && module && typeof module.exports === 'object') module.exports = api;
@@ -445,12 +504,15 @@
       root.addEventListener?.('hashchange', () => { gmailTarget = null; });
     }
     chrome.runtime.onMessage.addListener((message, sender, reply) => {
-      if (!['WEBMAIL_CAPTURE', 'WEBMAIL_VALIDATE', 'WEBMAIL_DISCARD'].includes(message?.type)) return false;
+      if (!['WEBMAIL_CAPTURE', 'WEBMAIL_VALIDATE', 'WEBMAIL_DISCARD', 'WEBMAIL_CHECK'].includes(message?.type)) return false;
       if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('') + 'sidepanel.html') {
         reply({ status: 'forbidden' }); return false;
       }
       if (message.type === 'WEBMAIL_DISCARD') {
         reply(discardGmail(document, message.target)); return false;
+      }
+      if (message.type === 'WEBMAIL_CHECK') {
+        reply(validateGmail(document, message.target, false)); return false;
       }
       if (message.type === 'WEBMAIL_VALIDATE') {
         reply(validateGmail(document, message.target)); return false;
