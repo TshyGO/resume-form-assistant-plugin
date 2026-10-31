@@ -41,13 +41,20 @@
   // 「港澳通行证」也可能是内地居民往来港澳通行证，不当成回乡证。一种写法只能在一组里（tests/ai-helpers.test.js 查）。
   const ETHNIC_NAMES = ("汉 蒙古 回 藏 维吾尔 苗 彝 壮 布依 朝鲜 满 侗 瑶 白 土家 哈尼 哈萨克 傣 黎 傈僳 佤 畲 高山 拉祜 水 东乡 纳西 景颇 柯尔克孜 土 "
     + "达斡尔 仫佬 羌 布朗 撒拉 毛南 仡佬 锡伯 阿昌 普米 塔吉克 怒 乌孜别克 俄罗斯 鄂温克 德昂 保安 裕固 京 塔塔尔 独龙 鄂伦春 赫哲 门巴 珞巴 基诺").split(" ");
+  // 外语等级。「四级」「六级」也是计算机等级这类题的写法，这几组只在选项里至少有两种外语等级时才用（findSelectOptionIndex）。
+  const LEVEL_SYNONYMS = [
+    ["CET-4", "大学英语四级", "英语四级", "四级"],
+    ["CET-6", "大学英语六级", "英语六级", "六级"],
+    ["TEM-4", "专业英语四级", "英语专业四级", "专四"],
+    ["TEM-8", "专业英语八级", "英语专业八级", "专八"]
+  ];
   const OPTION_SYNONYMS = [
     // 证件类型（#418）：「我的信息」写全称（profile-fields.js），网站常写简称，旁边还有「香港居民身份证」这类。
     ["居民身份证", "身份证", "中国居民身份证", "中华人民共和国居民身份证", "大陆居民身份证", "二代身份证"],
     ["港澳居民来往内地通行证", "回乡证"],
     ["台湾居民来往大陆通行证", "台胞证"],
-    // 政治面貌：国标全称（GB/T 4762）、常用简称。
-    ["中共党员", "中国共产党党员", "共产党员", "党员"],
+    // 政治面貌：国标全称（GB/T 4762）、常用简称。单写「党员」不收：民主党派的党员也这么写。
+    ["中共党员", "中国共产党党员", "共产党员"],
     ["中共预备党员", "中国共产党预备党员", "预备党员"],
     ["共青团员", "中国共产主义青年团团员", "团员"],
     ["民革会员", "中国国民党革命委员会会员"],
@@ -63,11 +70,7 @@
     // 学历：只收学历自己的写法，「硕士」「博士」也是学位，不放进来。
     ["大学本科", "本科"],
     ["大学专科", "专科", "大专"],
-    // 外语等级。
-    ["CET-4", "大学英语四级", "英语四级", "四级"],
-    ["CET-6", "大学英语六级", "英语六级", "六级"],
-    ["TEM-4", "专业英语四级", "英语专业四级", "专四"],
-    ["TEM-8", "专业英语八级", "英语专业八级", "专八"],
+    ...LEVEL_SYNONYMS,
     // 性别：英文表单。
     ["男", "男性", "Male"],
     ["女", "女性", "Female"]
@@ -75,7 +78,7 @@
   ];
   const SYNONYM_GROUPS = new Map();
   for (const names of OPTION_SYNONYMS) {
-    const group = { names, normalized: new Set(names.map(normalizeText)) };
+    const group = { names, normalized: new Set(names.map(normalizeText)), family: LEVEL_SYNONYMS.includes(names) ? "level" : "" };
     for (const name of group.normalized) if (!SYNONYM_GROUPS.has(name)) SYNONYM_GROUPS.set(name, group);
   }
 
@@ -398,8 +401,12 @@
     if (index >= 0) return index;
 
     // 同一个意思的另一种写法（见 OPTION_SYNONYMS）：选项里正好一项是才用它，几项都是就照下面的规则。
-    const names = SYNONYM_GROUPS.get(normalizedTarget)?.normalized;
-    const synonyms = names ? usable.filter(({ option }) => names.has(normalizeText(optionText(option))) || names.has(normalizeText(optionValue(option)))) : [];
+    // 外语等级（LEVEL_SYNONYMS）还要选项里至少有两种外语等级，免得「一级 … 四级」的计算机等级题收下「CET-4」。
+    const group = SYNONYM_GROUPS.get(normalizedTarget);
+    const groupOf = (option) => SYNONYM_GROUPS.get(normalizeText(optionText(option))) || SYNONYM_GROUPS.get(normalizeText(optionValue(option)));
+    const outOfScope = Boolean(group?.family)
+      && new Set(usable.map(({ option }) => groupOf(option)).filter((other) => other?.family === group.family)).size < 2;
+    const synonyms = group && !outOfScope ? usable.filter(({ option }) => groupOf(option) === group) : [];
     if (synonyms.length === 1) return synonyms[0].index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
@@ -428,12 +435,13 @@
   }
 
   // 选项文字和要填的值是不是同一项：归一化后相同，或是同一个意思的另一种写法（OPTION_SYNONYMS）。
-  // 虚拟列表只画出一部分时只认这样的一项（custom-controls.js 的 match）。
+  // 虚拟列表只画出一部分时只认这样的一项（custom-controls.js 的 match）。外语等级要看整张列表才算数，这里不认。
   function isSameOptionText(text, value) {
     const a = normalizeText(text);
     const b = normalizeText(value);
     if (!a || !b) return false;
-    return a === b || Boolean(SYNONYM_GROUPS.get(b)?.normalized.has(a));
+    const group = SYNONYM_GROUPS.get(b);
+    return a === b || Boolean(group && !group.family && group.normalized.has(a));
   }
 
   // 下拉框里搜索时打的字：要填的值有别的写法、且每种写法都含着其中最短的一种时打这一种

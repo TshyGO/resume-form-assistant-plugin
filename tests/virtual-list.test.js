@@ -395,7 +395,7 @@ const PARTY = ["中国共产党党员", "中国共产党预备党员", "中国�
   "中国民主促进会会员", "中国农工民主党党员", "中国致公党党员", "九三学社社员", "台湾民主自治同盟盟员", "无党派民主人士", "群众"];
 
 test("virtual list: another way of writing the wanted value on the first screen is chosen without searching", async () => {
-  for (const [choices, value, wanted] of [[ETHNIC, "汉族", "汉"], [PARTY, "共青团员", "中国共产主义青年团团员"], [PARTY, "党员", "中国共产党党员"]]) {
+  for (const [choices, value, wanted] of [[ETHNIC, "汉族", "汉"], [PARTY, "共青团员", "中国共产主义青年团团员"], [PARTY, "中共党员", "中国共产党党员"]]) {
     for (const layout of [false, true]) {
       const h = antd(choices, { search: true, layout });
       const result = await h.api.operate(h.target, value);
