@@ -126,6 +126,7 @@ export function mountInbox(
   let loaded = false;
   let listMode: "stored" | "recycled" = "stored";
   let refreshRevision = 0;
+  let countRevision = 0;
   let aiPanel: { unmount(): void } | null = null;
   let selectedId: string | null = null;
   let previewMode: "pending" | "stored" = "stored";
@@ -155,8 +156,17 @@ export function mountInbox(
   async function refresh(): Promise<boolean> {
     const mode = listMode;
     const revision = ++refreshRevision;
+    const countTick = ++countRevision;
+    // The badge belongs to the stored list, even while another tab is open.
+    // Its request must not block recycling or replace the current preview.
+    const stored = invoke<EvidenceSummary[]>("list_inbox_cmd");
+    void stored.then(next => {
+      if (count && countTick === countRevision) count.textContent = String(next.length);
+    }, () => {
+      if (count && countTick === countRevision) count.textContent = "";
+    });
     try {
-      const next = await invoke<EvidenceSummary[]>(mode === "recycled" ? "list_recycled_evidence_cmd" : "list_inbox_cmd");
+      const next = await (mode === "stored" ? stored : invoke<EvidenceSummary[]>("list_recycled_evidence_cmd"));
       if (revision !== refreshRevision || mode !== listMode) return false;
       items = next;
     } catch (error) {
@@ -168,7 +178,6 @@ export function mountInbox(
         list.innerHTML = `<div class="pane-empty"><h3>${mode === "recycled" ? "读不到回收站" : "读不到招聘通知"}</h3><p>请检查本机档案后重试。</p><button type="button">重新读取</button></div>`;
         list.querySelector("button")?.addEventListener("click", () => { say(null); void refresh(); });
         if (previewMode !== "pending") preview.innerHTML = '<div class="pane-empty" data-read-error><h2>暂时无法读取通知</h2><p>请点击列表中的「重新读取」重试。</p></div>';
-        if (count && mode === "stored") count.textContent = "";
       }
       return false;
     }
@@ -213,7 +222,6 @@ export function mountInbox(
 
   function renderList() {
     shell?.classList.toggle("is-empty", loaded && !items.length);
-    if (count && listMode === "stored") count.textContent = loaded ? String(items.length) : "";
     if (!loaded) {
       list.innerHTML = '<p class="todo-list-note muted">正在读取…</p>';
       return;

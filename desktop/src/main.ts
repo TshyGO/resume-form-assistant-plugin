@@ -19,6 +19,7 @@ import { describeCheckFailure, describeUpdate, formatCheckedAt, parseCheckedAt, 
 import type { UpdateInfo, UpdatePreference } from "./update-check.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
+import { followInboxChanges } from "./inbox-refresh.ts";
 import { mountMailboxes } from "./mailbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
@@ -507,7 +508,9 @@ const mailboxes = mountMailboxes(command, () => inbox.refresh(), () => {
   void navigate("settings").then((moved) => { if (moved) settingsNavigation.select("mailbox"); });
 }, inbox, () => { void navigate("inbox"); });
 void mailboxes.refresh();
-if (events?.listen) void events.listen("evidence-changed", () => { void inbox.refresh(); });
+followInboxChanges(() => inbox.refresh(), events?.listen
+  ? (name, handler) => events.listen!(name, handler)
+  : undefined);
 if (events?.listen) void events.listen("mailbox-changed", () => { void mailboxes.refresh(); });
 document.getElementById("view-inbox")?.addEventListener("click", (event) => {
   if ((event.target as HTMLElement).closest('[data-empty-act="connect"]')) {
@@ -584,7 +587,6 @@ refreshStatus().catch((err: unknown) => {
 applications.refreshList().catch((err: unknown) => {
   must("apps-msg").textContent = String(err);
 });
-inbox.refresh().catch(() => {});
 setInterval(() => {
   refreshStatus().catch(() => {});
 }, 4000);

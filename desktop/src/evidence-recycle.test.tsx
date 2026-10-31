@@ -62,7 +62,11 @@ test("failed recycle preserves the notification and provides a retryable error",
 test("late active-list responses cannot overwrite the recycle list or its selected preview", async () => {
   const h = setup(); await h.inbox.refresh(); const old = {...h.row};
   let release!: (data: unknown) => void;
-  h.handlers.list_inbox_cmd = () => new Promise(resolve => {release = resolve;});
+  let first = true;
+  h.handlers.list_inbox_cmd = () => {
+    if (first) { first = false; return new Promise(resolve => {release = resolve;}); }
+    return h.rows.filter(r => !r.recycled && !r.applicationId).map(r => ({...r}));
+  };
   const oldRefresh = h.inbox.refresh(); h.row.recycled = true;
   fireEvent.click(el("mailbox-tab-recycled"));
   const item = await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知/}); fireEvent.click(item);
@@ -70,6 +74,7 @@ test("late active-list responses cannot overwrite the recycle list or its select
   release([old]); await oldRefresh;
   expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
   expect(el("mailbox-tab-recycled").getAttribute("aria-selected")).toBe("true");
+  expect(el("inbox-count").textContent).toBe("0");
 });
 test("importing from the recycle view returns to the active list and reveals the imported notification", async () => {
   const h = setup(); h.row.recycled = true; await h.inbox.refresh();
@@ -108,6 +113,42 @@ async function openRecycled(h: ReturnType<typeof setup>) {
   fireEvent.click(await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知 one/}));
   return h.preview.findByRole("button", { name: "永久删除" });
 }
+
+test("external webmail saves refresh the stored badge while preserving the recycled tab and selected body", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  await h.preview.findByRole("button", {name:"恢复通知"});
+  h.rows.push(fixture("external-save"));
+  await h.inbox.refresh();
+  expect(el("inbox-count").textContent).toBe("1");
+  expect(el("mailbox-tab-recycled").getAttribute("aria-selected")).toBe("true");
+  expect(h.preview.getByText("原正文始终保留")).toBeTruthy();
+  expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
+  expect(within(el("inbox-recycled-list")).queryByRole("button", {name:/external-save/})).toBeNull();
+  fireEvent.click(el("mailbox-tab-stored"));
+  await within(el("inbox-list")).findByRole("button", {name:/external-save/});
+});
+
+test("badge reads do not block the recycle list, and a failed count is unknown rather than stale zero", async () => {
+  const h = setup(); h.row.recycled = true;
+  let reject!: (error: unknown) => void;
+  h.handlers.list_inbox_cmd = () => new Promise((_, fail) => { reject = fail; });
+  fireEvent.click(el("mailbox-tab-recycled"));
+  fireEvent.click(await within(el("inbox-recycled-list")).findByRole("button", {name:/功能验证通知 one/}));
+  await h.preview.findByRole("button", {name:"恢复通知"});
+  reject(new Error("count unavailable"));
+  await waitFor(() => expect(el("inbox-count").textContent).toBe(""));
+  expect(h.preview.getByRole("button", {name:"恢复通知"})).toBeTruthy();
+});
+
+test("external refresh updates the badge without replacing a pending-mail preview", async () => {
+  const h = setup(); h.row.recycled = true;
+  await h.inbox.showRecycled();
+  h.inbox.showPending(null);
+  h.rows.push(fixture("external-save"));
+  await h.inbox.refresh();
+  expect(el("inbox-count").textContent).toBe("1");
+  expect(h.preview.getByRole("heading", {name:"没有待确认邮件"})).toBeTruthy();
+});
 
 test("permanent deletion is only available in recycle bin and cancellation keeps the notification", async () => {
   const h = setup(); await h.inbox.refresh();
