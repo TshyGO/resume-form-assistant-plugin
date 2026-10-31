@@ -105,12 +105,17 @@ function antd4(choices, { label = '专业', remote = false, autoComplete = false
   const root = doc.querySelector('.ant-select'), input = root.querySelector('input');
   const picked = [], searches = [];
   let dropdown = null, items = typing ? [] : choices;
+  // AutoComplete 选中的建议写进输入框，没有 selection-item（2026-10-31 在真 antd 4.24.16 / 5.21.6 上看到）。
   const choose = text => {
     picked.push(text);
     root.querySelector('.ant-select-selection-placeholder')?.remove();
-    const item = doc.createElement('span'); item.className = 'ant-select-selection-item'; item.title = text; item.textContent = text;
-    root.querySelector('.ant-select-selector').append(item);
-    input.value = ''; dropdown.hidden = true; input.setAttribute('aria-expanded', 'false');
+    if (autoComplete) input.value = text;
+    else {
+      const item = doc.createElement('span'); item.className = 'ant-select-selection-item'; item.title = text; item.textContent = text;
+      root.querySelector('.ant-select-selector').append(item);
+      input.value = '';
+    }
+    dropdown.hidden = true; input.setAttribute('aria-expanded', 'false');
   };
   const render = () => {
     if (!items.length) { if (dropdown) dropdown.hidden = true; return; }
@@ -150,6 +155,17 @@ test('AntD 3 single selection is verified from its selected-value text', async (
   assert.equal(h.api.check(h.target).ok, true);
   h.root.querySelector('.ant-select-selection-selected-value').remove();
   assert.equal(h.api.check(h.target).reason, 'value_reverted');
+});
+
+// #301 #418 南航（ant-design-vue 1.7.8）的证件类型：资料写「居民身份证」，选项里有「身份证」「香港居民身份证」「澳门居民身份证」。
+test('an ID type from the profile selects the site option that is another name for it', async () => {
+  const ids = ['身份证', '护照', '回乡证', '港澳通行证', '香港居民身份证', '澳门居民身份证', '台胞证'];
+  for (const [value, wanted] of [['居民身份证', '身份证'], ['港澳居民来往内地通行证', '回乡证'], ['台湾居民来往大陆通行证', '台胞证']]) {
+    const h = antd3(ids, { label: '证件类型' });
+    const result = await h.api.operate(h.target, value);
+    assert.equal(result.ok, true, `${value}: ${result.reason}`);
+    assert.deepEqual(h.picked, [wanted]);
+  }
 });
 
 test('AntD 3 existing selection is read as the displayed choice', () => {
@@ -238,11 +254,14 @@ test('AntD 4/5 select picks from its rendered options as before', async () => {
   assert.deepEqual(h.searches, []);
 });
 
-test('AntD AutoComplete without suggestions is not typed into', async () => {
+// AutoComplete 是联想输入框：框里的字就是值，也能填建议里没有的字。点开没有建议时和别的联想框一样打字，再选同名的建议。
+test('AntD AutoComplete without suggestions on opening is typed into like other suggestion boxes', async () => {
   const h = antd4(['北京大学', '清华大学'], { label: '毕业院校', autoComplete: true });
   assert.equal(h.target.controlKind, 'custom-select');
   const result = await h.api.operate(h.target, '北京大学');
-  assert.equal(result.reason, 'options_not_rendered');
-  assert.deepEqual(h.searches, []);
-  assert.equal(h.input.value, '');
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(h.picked, ['北京大学']);
+  assert.deepEqual(h.searches, ['北京大学']);
+  assert.equal(h.input.value, '北京大学');
+  assert.deepEqual(Array.from(h.w.ResumeProCustomControls.readSelection(h.target).texts), ['北京大学']);
 });

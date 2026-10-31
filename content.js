@@ -86,6 +86,7 @@
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     format_mismatch: "只能填数字",
+    readonly_picker: "网页自己的选择框",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
@@ -483,7 +484,7 @@
     }
     // Every helper this script calls must have loaded. A page element or frame named "module"
     // once kept one from loading (#275), and the page then must not show as connected.
-    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProCustomControls",
+    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProAntdPrefix", "ResumeProCustomControls",
       "ResumeProControls", "ResumeProProfile", "ResumeProResumeData", "ResumeProFormAgent", "ResumeProFillProbe",
       "ResumeProFieldScan", "ResumeProPageOutline", "ResumeProDeepAnalysis", "ResumeProPageActions",
       "ResumeProPageRecipe", "ResumeProSidebarState"];
@@ -4726,6 +4727,21 @@
     return "";
   }
 
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：换了前缀的类名再补一份 ant- 的写法，按 antd 的类名比对；
+  // 选择器里的 .ant- 按节点所在文档的前缀展开。
+  function antdClassText(node) {
+    const antd = self.ResumeProAntdPrefix;
+    const text = classText(node);
+    if (!antd || !text) return text;
+    const tokens = text.split(/\s+/);
+    const renamed = tokens.map((token) => antd.token(node, token)).filter((token, index) => token !== tokens[index]);
+    return renamed.length ? `${text} ${renamed.join(" ")}` : text;
+  }
+
+  function antdCss(node, selector) {
+    return self.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  }
+
   function isShown(node) {
     let current = node;
     const doc = docOf(node);
@@ -4761,7 +4777,7 @@
     }
     const className = classText(node);
     return /(?:^|[\s_])(?:error|has-error|is-error|is-invalid|invalid-feedback|field-error|form-error)(?:$|[\s_])/i.test(className)
-      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(className);
+      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(antdClassText(node));
   }
 
   function listOtherControls(root, skip) {
@@ -4851,7 +4867,7 @@
 
   function containerFrameworkUnsynced(element) {
     const container = associatedContainer(element);
-    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
+    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(antdClassText(container));
   }
 
   // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
@@ -5144,9 +5160,9 @@
       ? { opened: "none" } : null;
   }
 
-  // #399 #405 写入被拒（值没有写上、被页面退回）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
+  // #399 #405 写入被拒（值没有写上、被页面退回，#417 只读的选择框写不上）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
   // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
-  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted"]);
+  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted", "readonly_picker"]);
   // 框里剩下的也给没选上的日历记（#301）：控件层只在框里换成了别的日子时给 after=other。
   const LEFTOVER_REASONS = new Set([...TEXT_REJECTED, "selection_not_committed"]);
   const textLeftovers = new WeakMap();
@@ -5204,7 +5220,7 @@
   function watchOverlays(control) {
     const visibleOverlays = () => {
       try {
-        return Array.from(docOf(control).querySelectorAll(OVERLAY_SELECTOR))
+        return Array.from(docOf(control).querySelectorAll(antdCss(control, OVERLAY_SELECTOR)))
           .filter((node) => !node.contains(control) && !node.closest(`#${SIDEBAR_ID}`) && isVisible(node));
       } catch {
         return [];
@@ -5242,7 +5258,9 @@
       // 没有 MutationObserver 时只在结束时看一次。
     }
     const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
-    return { kind: () => kind, settled, stop, calendarOpen };
+    // 插件自己要收起网页打开的弹层之前（#301 #417 只读框写不上），先看一眼：防抖的那一次可能还没到，收起以后就看不到了。
+    const peek = () => { if (!done && look()) stop(); };
+    return { kind: () => kind, settled, stop, calendarOpen, peek };
   }
 
   // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
@@ -5256,7 +5274,8 @@
     // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
     if (watch) overlayWatches.set(control, watch);
     else if (control && typeof control === 'object') overlayWatches.delete(control);
-    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill,
+      beforeDismiss: () => watch?.peek() });
     if (result.ok && watch && isInputElement(control) && await calendarKeptOpen(watch, control, value)) {
       result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
     }
@@ -5349,7 +5368,7 @@
     }
 
     if (fieldEntry?.pickerType) {
-      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime") || element];
+      return [element.closest(antdCss(element, ".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime")) || element];
     }
 
     return [element];

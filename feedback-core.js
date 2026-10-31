@@ -97,7 +97,7 @@
     "in_flight", "internal", "other"];
   // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
   const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "format_mismatch", "operation_failed", "cancelled"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "format_mismatch", "readonly_picker", "operation_failed", "cancelled"];
   // A text the page did not keep (#399 #405): what the box held after it lost focus (empty, what it held before
   // the fill, or something else; never the text itself), and whether a suggestion list or another popup came
   // up within a second of writing. The box's inputmode is part of its structure.
