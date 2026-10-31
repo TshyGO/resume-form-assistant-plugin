@@ -407,7 +407,9 @@
           ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible));
           ctx.alreadyOpen = doc.activeElement === ctx.el && ctx.popupsBefore.size === 1;
         }
-        if (custom) ctx.popupsBeforeFocus = scope.ResumeProCustomControls.visiblePopups?.(ctx.entry, visible) || null;
+        // 聚焦之前记下看得见的弹层（见 custom-controls.js 的 shownLayers）：有的下拉、日历一聚焦就展开，聚焦后再记就把它算成了原有的。
+        // 只读日期框也走 custom-controls 的日历路径（#301 智联 Element 日期一聚焦就打开）。
+        if (custom || (ctx.kind === 'date' && ctx.el?.readOnly)) ctx.popupsBeforeFocus = scope.ResumeProCustomControls?.visiblePopups?.(ctx.entry, visible) || null;
         if (!direct) focus(ctx.el);
         await delay(0);
         const afterFocus = stop(ctx, true);
@@ -494,7 +496,11 @@
       }
     }
 
+    // 题目和占位提示：一段起止取哪一头看它们（见 ai-helpers.js 的 rangeDateValue）。
+    const dateHint = ctx => [ctx.entry?.binding?.label, ctx.el?.getAttribute?.('placeholder'), ctx.el?.getAttribute?.('aria-label')].filter(Boolean).join(' ');
     async function operateDate(ctx, raw) {
+      // #301 日期题收到一段起止（「2019.09-2023.06」）：题目写明开始还是结束时取那一头，各种日期控件都一样。
+      raw = helpers?.rangeDateValue?.(raw, dateHint(ctx)) ?? raw;
       if (['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type)) {
         const expected = helpers?.normalizeDateValue?.(raw, ctx.el.type) ?? String(raw ?? '');
         if (!expected) return { reason: 'invalid_date' };

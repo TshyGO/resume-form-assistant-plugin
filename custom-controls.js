@@ -247,6 +247,39 @@
     const all = Array.from(new Set(Array.from(doc.querySelectorAll(antd(doc, POPUPS)), outerPopup))).filter(visible);
     return all.filter(node => !all.some(other => other !== node && other.contains(node)));
   }
+  // #301 点开之前就看得见的浮层：上一个下拉、联想框、日历没收起或正在退场的那一块（#417 智联、hotjob）。
+  // 下一个控件认弹层时跳过它们（见 staleLayer）。组件库的弹层外壳按类名认；别的按类名里的词认，并且自己浮在页面上、里面有字
+  // （网页放所有弹层的空外壳不算，不然里面新画的弹层也会被跳过）。
+  const FLOATING = '.el-popper, .el-picker-panel, .el-autocomplete-suggestion, .ant-calendar-picker-container, .ant-cascader-menus, .ant-picker-dropdown';
+  const FLOATING_WORDS = ['popper', 'popover', 'popup', 'dropdown', 'picker-panel', 'suggest', 'calendar', 'datepicker', 'date-picker']
+    .map(word => `[class*="${word}" i]`).join(', ');
+  // 只按类名里的词认出的浮层，记下时里面有哪些元素（见 staleLayer）。一块里超过这么多的不记，按装着就算旧的。
+  const layerNodes = new WeakMap();
+  const LAYER_NODES_MAX = 5000;
+  function shownLayers(doc, visible) {
+    const View = doc.defaultView;
+    const floating = node => ['absolute', 'fixed'].includes(View?.getComputedStyle(node).position);
+    const shells = new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(antd(doc, FLOATING))).filter(visible)]);
+    const worded = Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => !shells.has(node) && trim(node.textContent) && visible(node) && floating(node));
+    // 组件库的弹层外壳一块只装一个弹层，里面重画了也还是旧的；只按类名里的词认出的可能是网页放弹层的常驻外壳，记下里面原有的元素。
+    for (const layer of worded) {
+      const nodes = layer.querySelectorAll('*');
+      if (nodes.length <= LAYER_NODES_MAX) layerNodes.set(layer, new WeakSet(nodes));
+    }
+    return new Set([...shells, ...worded]);
+  }
+  // 被点开前就开着的浮层装着、或装着它的一块不是这次点开的。装着这个控件的不算：页面上常驻的大块 listbox、tree。
+  // 旧浮层装着它时：组件库的外壳算旧的；只按类名里的词认出的，只有它自己点开前就在这块里才算旧的——
+  // 网页放弹层的常驻外壳（或外壳里常驻的包装节点）装着上一题留下的下拉，这次新放进去的日历、下拉不算。
+  function staleLayer(node, info) {
+    return Array.from(info.before || []).some(old => {
+      if (!old.isConnected || old.contains(info.root)) return false;
+      if (node === old || node.contains(old)) return true;
+      if (!old.contains(node)) return false;
+      const known = layerNodes.get(old);
+      return !known || known.has(node);
+    });
+  }
   function ownedPopup(info, visible) {
     const sources = [info.combo, info.el, info.root, ...info.root.querySelectorAll('[aria-controls], [aria-owns]')];
     const ids = new Set(sources.flatMap(node => `${node.getAttribute('aria-controls') || ''} ${node.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean)));
@@ -509,6 +542,10 @@
   const PRESENT = /^(?:至今|至今在读|今|现在|present|now|till now|to date)$/i;
   const CN_MONTHS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'];
   const OTHER_MONTH = /(?:prev|last|next|other|pre)[-_]?month|disabled|outside|out-of/i;
+  // 标成选中的日子（ant-calendar-selected-day、is-selected、aria-selected）。unselected 不算。
+  const SELECTED_TOKEN = /(?:^|[-_])selected(?:$|[-_])/i;
+  // 日历自带的日期框打了字以后，等日历跟上的上限（见 pickDate）。
+  const TYPED_DATE_MS = 300;
   const pad2 = value => String(value).padStart(2, '0');
   function yearOf(text) { const hit = /^(\d{4})\s*年?$/.exec(trim(text)); return hit ? Number(hit[1]) : 0; }
   function monthOf(text) {
@@ -523,6 +560,10 @@
     if (!hit[2]) return '';
     if (mode === 'month') return `${hit[1]}-${pad2(hit[2])}`;
     return hit[3] ? `${hit[1]}-${pad2(hit[2])}-${pad2(hit[3])}` : '';
+  }
+  // 题目和占位提示：一段起止取哪一头看它们（见 ai-helpers.js 的 rangeDateValue）。
+  function dateHint(ctx) {
+    return [ctx.entry?.binding?.label, ctx.el?.getAttribute?.('placeholder'), ctx.el?.getAttribute?.('aria-label')].filter(Boolean).join(' ');
   }
   function dateTarget(raw, helpers) {
     const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helpers.normalizeDateValue(raw, 'date'));
@@ -553,6 +594,13 @@
       }
       return false;
     };
+    const pickedCell = el => {
+      for (let node = el; node && node !== layer; node = node.parentElement) {
+        if (node.getAttribute?.('aria-selected') === 'true' || String(node.getAttribute?.('class') || '').split(/\s+/).some(token => SELECTED_TOKEN.test(token))) return true;
+        if (node.matches?.('td, [role="gridcell"]')) return false;
+      }
+      return false;
+    };
     const buttons = Array.from(layer.querySelectorAll('[class]')).filter(el => h.visible(el) && !el.closest('td')).map(el => {
       const cls = String(el.getAttribute('class')).toLowerCase();
       const dir = /prev|last|left/.test(cls) ? -1 : /next|right/.test(cls) ? 1 : 0;
@@ -568,8 +616,12 @@
       dayCells: cells(dayOf).length,
       // 8. 用 aria-disabled / disabled 属性标出的不可选日期也不点。
       days: cells(dayOf, el => !otherMonth(el) && !disabledCell(el)),
+      // 本月标成选中的日子。
+      picked: cells(dayOf, el => !otherMonth(el) && pickedCell(el)).map(cell => cell.value),
       headYear: headYear ? yearOf(headYear.textContent) : 0, headYearNode: headYear || null,
       headMonth: headMonth ? monthOf(headMonth.textContent) : 0, headMonthNode: headMonth || null,
+      // 格子以外的字（标题、按钮）：年月认不出时，拿它看日历有没有动。
+      head: leaves.filter(el => !inCell(el)).map(el => trim(el.textContent)).join('|'),
       button: (level, dir) => buttons.find(button => button.level === level && button.dir === dir)?.el || null,
       input
     };
@@ -591,7 +643,8 @@
   function calendarNear(info, h) {
     const doc = info.el.ownerDocument, c = info.root.getBoundingClientRect();
     const found = Array.from(doc.querySelectorAll('[class]')).filter(el => CALENDAR_CLASS.test(String(el.getAttribute('class')))
-      && h.visible(el) && !el.contains(info.root) && (!info.root.contains(el) || innerPopup(el, info.root, info.el)) && el.querySelector('td, [role="gridcell"]'));
+      && h.visible(el) && !el.contains(info.root) && (!info.root.contains(el) || innerPopup(el, info.root, info.el)) && el.querySelector('td, [role="gridcell"]')
+      && !staleLayer(el, info));
     const outer = found.filter(el => !found.some(other => other !== el && other.contains(el)));
     const near = outer.filter(el => {
       const r = el.getBoundingClientRect();
@@ -612,6 +665,8 @@
   }
   async function pickDate(ctx, raw, h, layer, info) {
     const doc = info.el.ownerDocument;
+    // 点开的是日历：日期不对、选不成也照实报日历（诊断 opened=calendar）。
+    ctx.observed = { ...ctx.observed, popupRole: 'calendar' };
     // 日历切换年/月时整块重建的：旧面板不在了就在控件旁边重新找一次。
     const current = () => {
       if (layer.isConnected && h.visible(layer)) return layer;
@@ -619,6 +674,8 @@
       if (again) layer = again;
       return again;
     };
+    // 一段起止（「2019.09-2023.06」）：题目写明开始还是结束时取那一头，别的照旧按日期不对报。
+    raw = h.helpers.rangeDateValue?.(raw, dateHint(ctx)) ?? raw;
     if (PRESENT.test(trim(raw))) return pickPresent(ctx, h, layer, info);
     const target = dateTarget(raw, h.helpers);
     if (!target || target.y < 1900 || target.y > 2100) return { reason: 'invalid_date' };
@@ -634,22 +691,59 @@
     const expected = mode === 'date' ? `${want.y}-${pad2(want.m)}-${pad2(want.d)}` : mode === 'month' ? `${want.y}-${pad2(want.m)}` : String(want.y);
     const accepted = () => (selectedTexts(info) || []).some(text => shownDate(text, mode) === expected)
       || (info.el.tagName === 'INPUT' && shownDate(info.el.value, mode) === expected);
-    ctx.observed = { ...ctx.observed, popupRole: 'calendar', calendarMode: mode };
-    // 1. 日历自带的日期框：按它现有的格式输入、回车。
+    ctx.observed = { ...ctx.observed, calendarMode: mode };
+    // 没选上时框里换成了别的日子（既不是要填的，也不是点开前的）：回车交出了日历原来指着的日子（#418 是今天）。
+    // 照没选上报，诊断里写明框里是别的（after=other），侧栏也不说成只是没选上。
+    const shownNow = () => [...(selectedTexts(info) || []), info.el.tagName === 'INPUT' ? info.el.value : ''].join(' ');
+    const original = shownDate(shownNow(), mode);
+    const missed = () => {
+      const now = shownDate(shownNow(), mode);
+      if (now && now !== expected && now !== original) ctx.observed = { ...ctx.observed, after: 'other' };
+      return { reason: 'selection_not_committed' };
+    };
+    // 1. 日历自带的日期框：按它现有的格式输入，等日历跟上再回车。ant-design-vue 1.x（Vue 2，#418 南航）过一拍
+    // 才把框里的字交给日历，同一拍回车交出的是日历原来的日子（没选过是今天）。让一拍，再等日历跟上，最多约 0.3 秒：
+    // 标题是要填的年月，标成选中的是要填的那天；没有标成选中的日子，就等日历上的字（标题、按钮）和打字前不一样，
+    // 标题认不出（英文 Oct 2026）的也这样等。
     if (mode === 'date' && view.input) {
       const input = view.input, sep = input.value.includes('/') ? '/' : '-';
       const reason = h.stop(ctx, true); if (reason) return { reason };
+      const face = seen => `${seen.head}|${seen.picked.join(',')}`, untyped = face(view);
       h.write(input, [want.y, pad2(want.m), pad2(want.d)].join(sep), ctx); h.input(input);
-      const View = doc.defaultView;
-      for (const type of ['keydown', 'keypress', 'keyup']) input.dispatchEvent(new View.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      const typed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 600);
-      if (!typed.reason) return { accepted, dayDefaulted };
-      if (typed.reason !== 'verification_timeout') return { reason: typed.reason };
-      if (!current()) return { reason: 'selection_not_committed' };
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const caughtUp = seen => {
+        // 一时取不到日历（正在重画）不算跟上，接着等。
+        if (!seen) return false;
+        if ((seen.headYear && seen.headYear !== want.y) || (seen.headMonth && seen.headMonth !== want.m)) return false;
+        // 标题认不出年月时，选中的日子没变不算跟上（原来选着的可能正好是同一天），要等日历上的字也变了。
+        if (seen.picked.length && seen.headYear && seen.headMonth) return seen.picked.includes(want.d);
+        return face(seen) !== untyped && (!seen.picked.length || seen.picked.includes(want.d));
+      };
+      // 只有 antd 3 / ant-design-vue 1.x 的日历（.ant-calendar-input，换了前缀的 .X-calendar-input 也算，要在 .X-calendar 里）
+      // 自己接打的字；北森、Element 这类要回车才收，不等，过一拍就回车。
+      const followsTyping = Array.from(input.classList).some(token => {
+        const prefix = /^([A-Za-z][\w-]*)-calendar-input$/.exec(token)?.[1];
+        // 前缀只收字母开头的字母、数字、横线、下划线，拼进选择器不会变成别的写法。
+        return Boolean(prefix && input.closest(`.${prefix}-calendar`));
+      });
+      const caught = followsTyping ? await h.waitUntil(ctx, doc.documentElement, () => current() && calendarView(layer, h), caughtUp, TYPED_DATE_MS) : {};
+      if (caught.reason && caught.reason !== 'verification_timeout') return { reason: caught.reason };
+      const stopped = h.stop(ctx, true); if (stopped) return { reason: stopped };
+      // 等满了日历还没跟上（页面很忙）：看得出它还指着别的年月、别的日子时，回车交出的就是那一天，不回车，下面逐级点。
+      // 标题认不出、也没有选中日子的，看不出指着哪天，等满后照旧回车。
+      const still = caught.reason ? current() && calendarView(layer, h) : null;
+      if (!caught.reason || !(still && ((still.headYear && still.headMonth) || still.picked.length))) {
+        const View = doc.defaultView;
+        if (input.isConnected) for (const type of ['keydown', 'keypress', 'keyup']) input.dispatchEvent(new View.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        const typed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 600);
+        if (!typed.reason) return { accepted, dayDefaulted };
+        if (typed.reason !== 'verification_timeout') return { reason: typed.reason };
+      }
+      if (!current()) return missed();
     }
     // 2. 逐级点：日期表 → 年份标题 → 年份表 → 月份表 → 日期表。
     for (let step = 0; step < 40; step++) {
-      if (!current()) return { reason: 'selection_not_committed' };
+      if (!current()) return missed();
       view = calendarView(layer, h);
       let node = null, last = false;
       if (view.dayCells >= 28) {
@@ -682,10 +776,10 @@
       const reason = h.click(node, ctx, last); if (reason) return { reason };
       if (last) break;
       const moved = await h.waitUntil(ctx, doc.documentElement, looks, seen => seen !== null && seen !== before, 1000);
-      if (moved.reason) return { reason: moved.reason === 'verification_timeout' ? 'selection_not_committed' : moved.reason };
+      if (moved.reason) return moved.reason === 'verification_timeout' ? missed() : { reason: moved.reason };
     }
     const done = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
-    if (done.reason) return { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason };
+    if (done.reason) return done.reason === 'verification_timeout' ? missed() : { reason: done.reason };
     return { accepted, dayDefaulted };
   }
   async function perform(ctx, raw, h, state) {
@@ -719,7 +813,8 @@
     }
     const doc = info.el.ownerDocument;
     // 宿主在聚焦之前记下的弹层：有的下拉一聚焦就展开（#269 智联 Element UI），聚焦后再记就把它算成了原有的。
-    const before = ctx.popupsBeforeFocus || new Set(popups(doc, h.visible));
+    const before = ctx.popupsBeforeFocus || shownLayers(doc, h.visible);
+    info.before = before;
     // 通用路径：从点开之前开始记下新加或改了 class/style 的元素，弹层只在这些里找。
     const touched = new Set();
     const View = doc.defaultView || (typeof window !== 'undefined' ? window : null);
@@ -736,7 +831,7 @@
       const layers = new Map();
       for (const node of touched) {
         const box = genericPopupFrom(node, info, h, minOptions);
-        if (box && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
+        if (box && !staleLayer(box, info) && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
       }
       const found = Array.from(layers.keys());
       const outer = found.filter(node => !found.some(other => other !== node && other.contains(node)));
@@ -1089,7 +1184,7 @@
     const el = ctx.el, doc = el?.ownerDocument, View = doc?.defaultView;
     const wanted = trim(raw);
     if (el?.tagName !== 'INPUT' || el.readOnly || el.disabled || !['text', 'search'].includes(el.type) || !wanted || !View?.MutationObserver) return {};
-    const info = { el, root: el, combo: el, library: 'generic', cascade: false, multiple: false };
+    const info = { el, root: el, combo: el, library: 'generic', cascade: false, multiple: false, before: shownLayers(doc, h.visible) };
     const touched = new Set();
     const watch = new View.MutationObserver(records => {
       for (const record of records) {
@@ -1111,7 +1206,7 @@
         for (const node of touched) {
           if (!node.isConnected || hintLayer(node, el)) continue;
           const box = genericPopupFrom(node, info, h, 1);
-          if (box && !hintLayer(box, el) && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
+          if (box && !hintLayer(box, el) && !staleLayer(box, info) && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
         }
         const found = Array.from(layers.keys());
         const outer = found.filter(node => !found.some(other => other !== node && other.contains(node)));
@@ -1197,17 +1292,21 @@
           h.write(input, state.searchBefore); h.input(input);
         }
         const info = state.info;
-        if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
+        // 让组件里有焦点的那个元素失焦：AntD 3、ant-design-vue 1.x 可搜索的下拉焦点在搜索框里，只让选择框失焦等于没失焦，
+        // 下拉一直开着，下一个控件点开时会把它当成自己的弹层（#301 hotjob）。
+        const active = info?.el?.ownerDocument?.activeElement;
+        if (info?.root?.contains(active) && !h.stop(ctx)) h.blur(active);
         // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）；
-        // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
+        // 两级选择停在第一级时也收起。Element UI 2 的 el-select、el-cascader 失焦也不收（#417 智联），一样收起。
+        // 先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认；el-select 收到后不再往外传）。
         // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
         // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
         // 控件在对话框、抽屉里（见 DIALOGS）：不按 Esc，也不在页面上按（点外面就关的抽屉会当成点了外面），
-        // 只在对话框里、控件旁边按下、松开一次。
+        // 只在对话框里、控件旁边按下、松开一次。el-cascader 的 Esc 会传到对话框，也是这样收。
         // YUI 联想框没选成：失焦时它自己收起建议框；窗口不在前台时 blur() 不派发事件，就补一个 blur 给它。
         // 不按 Esc：会冒泡到外层对话框（#395）。
         if (info?.library === 'yui' && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) info.el.dispatchEvent(new info.el.ownerDocument.defaultView.FocusEvent('blur'));
-        if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
+        if ((['generic', 'element'].includes(info?.library) || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
           const dialog = dialogOf(info.root);
           if (dialog) {
@@ -1223,14 +1322,15 @@
       // 通用路径成功、失败都先等自己点开的弹层移除或隐藏（最多约 1 秒）再交还：弹层带退场动画时
       // 一边改 class 一边淡出，下一个相邻的下拉会把它也当成新出现的弹层，报「无法确定控件弹层」（#301 北森）。
       // 看装着选项的那一块：它不见了，外壳就算还在页面上也不会再被认成弹层。
-      const own = state.info?.library === 'generic' ? state.info.popup : null;
+      // AntD、Element 的下拉失败时也等：AntD 失焦后过一会儿才开始收（#301 hotjob），收起还有动画。
+      const own = state.info?.library === 'generic' || (outcome?.reason && ['antd', 'element'].includes(state.info?.library)) ? state.info.popup : null;
       const gone = () => !own.isConnected || !h.visible(own);
       if (own && !gone()) await h.waitUntil(ctx, state.info.el.ownerDocument.documentElement, gone, Boolean, POPUP_LEAVE_MS);
     }
   }
   function visiblePopups(target, visible) {
     const doc = describe(target).el?.ownerDocument;
-    return doc?.querySelectorAll ? new Set(popups(doc, visible)) : null;
+    return doc?.querySelectorAll ? shownLayers(doc, visible) : null;
   }
   // 自制单选（#269 北森 phoenix-radio）和通用路线共用：选项怎么点、选中了没有。
   const CHECKED_TOKEN = /(?:^|[-_])checked$/i;

@@ -130,6 +130,7 @@
     semanticizeParsedFields,
     normalizeParsedFields,
     normalizeDateValue,
+    rangeDateValue,
     detectCascadeGroups
   };
 
@@ -719,6 +720,21 @@
     }
   }
 
+  // 日期题收到一段起止（「2019.09-2023.06」，#301 北森）：题目或占位提示写明开始还是结束，就取前一个或后一个日期。
+  // 两样都写了（起止时间）、都没写，或不是正好两个日期的，原样交回，由日期控件报日期不对。
+  const SPAN_DATE = /(?:19|20)\d{2}(?:\s*年\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?|\s*[\/\-.]\s*\d{1,2}(?!\d)(?:\s*[\/\-.]\s*\d{1,2}(?!\d))?|\s*年)?/g;
+  // 「起」「止」单独成词才算（「在校时间（起）」「在校时间：止」）：「发起」「起薪」「禁止」里的不算。
+  const SPAN_START = /开始|起始|入学|入职|(?:^|[\s(（【\[:：])起(?=$|[\s)）】\]:：])|\b(?:start|from|begin)/i;
+  const SPAN_END = /结束|截止|终止|毕业|离职|(?:^|[\s(（【\[:：])止(?=$|[\s)）】\]:：])|\b(?:end|until)\b/i;
+  function rangeDateValue(rawValue, hint) {
+    const raw = String(rawValue ?? "").trim();
+    const dates = raw.match(SPAN_DATE) || [];
+    if (dates.length !== 2 || raw.replace(SPAN_DATE, "").replace(/[\s\-~～—–至到]/g, "")) return raw;
+    const text = String(hint ?? "");
+    const start = SPAN_START.test(text), end = SPAN_END.test(text);
+    return start === end ? raw : dates[start ? 0 : 1].trim();
+  }
+
   function parseDateParts(raw) {
     if (/(19|20)\d{2}.+(19|20)\d{2}/.test(raw)) return null;
 
@@ -733,7 +749,8 @@
       };
     }
 
-    const separatorMatch = raw.match(/^(\d{4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2})(?!\d))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
+    // 分隔符两边可以带空格（「2019 - 09」「2019. 09」，#301 北森）。
+    const separatorMatch = raw.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})(?:\s*[\/\-.]\s*(\d{1,2})(?!\d))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (separatorMatch) {
       return {
         year: separatorMatch[1],

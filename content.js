@@ -2583,7 +2583,10 @@
         textFillFailures.set(control, reason);
         if (assisted) { if (uncertain !== false) unconfirmedCount += 1; return; }
         const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || '未命名字段';
-        const why = TEXT_FILL_FAILURE_LABELS[reason] || '';
+        // #399 #405 写入被拒的文本框：框里剩下的是什么；#301 日历没选上、框里却换成了别的日子（#418 回车交出今天）。
+        const leftover = LEFTOVER_REASONS.has(reason) ? textLeftovers.get(control) : null;
+        const changed = reason === 'selection_not_committed' && leftover?.session === session && leftover.after === 'other';
+        const why = changed ? '选成了别的日期' : TEXT_FILL_FAILURE_LABELS[reason] || '';
         const shown = why ? `${label}（${why}）` : label;
         if (uncertain ?? ['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
           unconfirmedCount += 1;
@@ -2596,8 +2599,7 @@
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
         // #301 本次填写操作过的下拉：弹层有没有出来、里面有没有选项。没操作过的（上一级没选上）不带。
         const popup = controlPopups.get(control);
-        // #399 #405 写入被拒的文本框：框里剩下的是什么，填它的 1 秒内有没有冒出建议框或弹层。
-        const leftover = TEXT_REJECTED.has(reason) ? textLeftovers.get(control) : null;
+        // #399 #405 写入被拒的文本框：填它的 1 秒内有没有冒出建议框或弹层。
         const overlay = TEXT_REJECTED.has(reason) ? overlayWatches.get(control)?.kind() : null;
         const observed = {
           ...(popup && popup.session === session ? { opened: popup.opened, hasOptions: popup.hasOptions } : {}),
@@ -5161,6 +5163,8 @@
   // #399 #405 写入被拒（值没有写上、被页面退回，#417 只读的选择框写不上）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
   // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
   const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted", "readonly_picker"]);
+  // 框里剩下的也给没选上的日历记（#301）：控件层只在框里换成了别的日子时给 after=other。
+  const LEFTOVER_REASONS = new Set([...TEXT_REJECTED, "selection_not_committed"]);
   const textLeftovers = new WeakMap();
   // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
   const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",
@@ -5176,7 +5180,7 @@
   function rememberLeftover(target, result) {
     const control = target?.kind === "element" ? target.element : target;
     if (!control || typeof control !== "object") return;
-    if (TEXT_REJECTED.has(result?.reason) && result.observed?.after) textLeftovers.set(control, { after: result.observed.after, session: fillSession });
+    if (LEFTOVER_REASONS.has(result?.reason) && result.observed?.after) textLeftovers.set(control, { after: result.observed.after, session: fillSession });
     else textLeftovers.delete(control);
   }
 
