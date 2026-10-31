@@ -196,8 +196,12 @@ export function mountInbox(
     } else if (!items.length) {
       clearAiPanel();
       preview.innerHTML = emptyState();
-    } else if (!selectedId && preview.querySelector?.(".workspace-empty, [data-read-error]")) {
-      preview.innerHTML = emptyPreview;
+    } else if (!selectedId && preview.querySelector?.(".workspace-empty, [data-read-error], [data-list-loading]")) {
+      // The latest refresh owns the loading placeholder even if it superseded
+      // the request started by showStored/showRecycled.
+      preview.innerHTML = listMode === "recycled"
+        ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件、恢复到原位置，或永久删除。</p></div>'
+        : emptyPreview;
     }
     return true;
   }
@@ -345,7 +349,7 @@ export function mountInbox(
       clearAiPanel(); clearAttachments?.(); clearAttachments = null;
       previewMode = "stored";
       renderList();
-      preview.innerHTML = '<p class="pane-loading muted">正在读取通知…</p>';
+      preview.innerHTML = '<p class="pane-loading muted" data-list-loading>正在读取通知…</p>';
       if (!await refresh()) return;
     }
     if (listMode !== "stored" || token !== previewToken) return;
@@ -363,7 +367,7 @@ export function mountInbox(
     const token = ++previewToken;
     previewMode = "stored"; clearAiPanel(); clearAttachments?.(); clearAttachments = null;
     renderList();
-    preview.innerHTML = '<p class="pane-loading muted">正在读取回收站…</p>';
+    preview.innerHTML = '<p class="pane-loading muted" data-list-loading>正在读取回收站…</p>';
     const refreshed = await refresh();
     if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件、恢复到原位置，或永久删除。</p></div>' : emptyState();
   }

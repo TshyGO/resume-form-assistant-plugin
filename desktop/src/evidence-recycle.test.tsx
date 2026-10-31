@@ -165,6 +165,49 @@ test("unchanged foreground reads preserve the focused list row and organizer dra
   expect(input.value).toBe("interview_invite");
 });
 
+test.each([
+  ["stored", true, true], ["stored", true, false],
+  ["stored", false, true], ["stored", false, false],
+  ["recycled", true, true], ["recycled", true, false],
+  ["recycled", false, true], ["recycled", false, false],
+] as const)("latest refresh settles %s loading (has rows=%s, old first=%s)", async (mode, hasRows, oldFirst) => {
+  const h = setup();
+  if (mode === "stored") await h.inbox.showRecycled();
+  h.row.recycled = mode === "recycled";
+  if (!hasRows) h.rows.splice(0);
+  const rows = h.rows.map(row => ({...row}));
+  const command = mode === "stored" ? "list_inbox_cmd" : "list_recycled_evidence_cmd";
+  const releases: Array<(value: unknown) => void> = [];
+  h.handlers[command] = () => new Promise(resolve => {releases.push(resolve);});
+  const opening = mode === "stored" ? h.inbox.showStored() : h.inbox.showRecycled();
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeTruthy();
+  const foreground = h.inbox.refresh();
+  expect(releases).toHaveLength(2);
+  if (oldFirst) {
+    releases[0]([]); await opening;
+    releases[1](rows); await foreground;
+  } else {
+    releases[1](rows); await foreground;
+    releases[0]([]); await opening;
+  }
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeNull();
+  expect(el("inbox-preview").textContent).not.toContain("正在读取");
+  expect(el("inbox-preview").textContent).toContain(hasRows ? "选择一条通知" : mode === "stored" ? "没有待整理的招聘通知" : "回收站为空");
+  if (hasRows) expect(el(mode === "stored" ? "inbox-list" : "inbox-recycled-list").querySelector('[data-evidence="one"]')).toBeTruthy();
+});
+
+test("an older successful read cannot replace the latest failed-read recovery prompt", async () => {
+  const h = setup(); h.row.recycled = true;
+  let release!: (value: unknown) => void;
+  h.handlers.list_recycled_evidence_cmd = () => new Promise(resolve => {release = resolve;});
+  const opening = h.inbox.showRecycled();
+  h.handlers.list_recycled_evidence_cmd = () => {throw {message:"读不到档案"};};
+  expect(await h.inbox.refresh()).toBe(false);
+  release([{...h.row}]); await opening;
+  expect(el("inbox-preview").textContent).toContain("暂时无法读取通知");
+  expect(el("inbox-preview").querySelector("[data-list-loading]")).toBeNull();
+});
+
 test("permanent deletion is only available in recycle bin and cancellation keeps the notification", async () => {
   const h = setup(); await h.inbox.refresh();
   fireEvent.click(within(el("inbox-list")).getByRole("button", {name:/功能验证通知/}));
