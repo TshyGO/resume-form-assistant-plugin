@@ -60,6 +60,8 @@
     if (!el) return null;
     const attr = name => el.getAttribute?.(name);
     const tag = token(el.tagName);
+    // #405 输入框声明的输入方式（numeric、decimal 这类）：只在写了的时候带，取值由 feedback-core 再按固定词表筛。
+    const inputMode = token(attr("inputmode"));
     return {
       tag,
       type: tag === "input" ? token(el.type || attr("type")) || "text" : "",
@@ -67,7 +69,8 @@
       popup: token(attr("aria-haspopup")),
       readOnly: el.readOnly === true || attr("readonly") != null,
       picker: token(entry.pickerType),
-      library: libraryOf(el)
+      library: libraryOf(el),
+      ...(inputMode ? { inputMode } : {})
     };
   }
 

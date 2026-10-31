@@ -83,6 +83,7 @@
     cascade_unsupported: "两级选择暂不支持",
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
+    format_mismatch: "只能填数字",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
@@ -2546,6 +2547,7 @@
         cancelButton.onclick = async () => {
           if (phase === 'fillMs') {
             writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            overlayWatch?.stop(true);
             if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
             showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
             return;
@@ -2675,9 +2677,17 @@
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
         // #301 本次填写操作过的下拉：弹层有没有出来、里面有没有选项。没操作过的（上一级没选上）不带。
         const popup = controlPopups.get(control);
+        // #399 #405 写入被拒的文本框：框里剩下的是什么，填它的 1 秒内有没有冒出建议框或弹层。
+        const leftover = TEXT_REJECTED.has(reason) ? textLeftovers.get(control) : null;
+        const overlay = TEXT_REJECTED.has(reason) ? overlayWatches.get(control)?.kind() : null;
+        const observed = {
+          ...(popup && popup.session === session ? { opened: popup.opened, hasOptions: popup.hasOptions } : {}),
+          ...(leftover && leftover.session === session ? { after: leftover.after } : {}),
+          ...(overlay ? { overlay } : {})
+        };
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
-          ...(popup && popup.session === session ? { observed: { opened: popup.opened, hasOptions: popup.hasOptions } } : {}),
+          ...(Object.keys(observed).length ? { observed } : {}),
           // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
           ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
@@ -2697,6 +2707,7 @@
           if (checked && !checked.ok) {
             filledCount -= 1;
             if (item.isNew) supplemented -= 1;
+            rememberLeftover(item.element, checked);
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
@@ -2707,6 +2718,7 @@
           const current = isFieldBindingCurrent(item.element);
           const checked = current ? controlOperator?.check(item.element) : null;
           if (!checked?.ok) {
+            rememberLeftover(item.element, checked);
             noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
             continue;
           }
@@ -2734,6 +2746,8 @@
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
+      // 本次填写里为看弹层多等过的被拒文本框个数（最多 OVERLAY_WAITS 个）。
+      let overlayWaits = 0;
       let dayDefaulted = 0;
       // #301 新字段的去向：「加到我的信息」看 grownFields 和 grownMatchedIds；补填失败或没发出的进 grownMissed，
       // 状态行请用户自己补，并附上补填请求的警告。
@@ -2923,7 +2937,7 @@
             && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
           : null;
         const partnerBefore = partner ? fillValueSnapshot(partner) : null;
-        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
         stopInterruptedControl();
         // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
         // 内容和填写前一样（重建冲掉了这次写入）就在新字段上重做一次；显示的正是刚选的值就算填上；
@@ -2936,7 +2950,7 @@
             approvedValues.set(fresh, approved);
             fieldMap.set(match.fieldId, fresh);
             element = fresh;
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
           } else if (fresh && showsFilledValue(fresh, match.value)) {
             approvedValues.set(fresh, now);
@@ -2949,10 +2963,10 @@
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           // 日期控件显示的是组件自己的格式（猎聘是「1998年06月」）：交给控件层按面板精度复核，不逐字比较（#236）。
-          // 手机号框自己加了空格、短横的按数字比（#229）。节点被页面替换的，都算未确认。
+          // 手机号框自己加了空格、短横的按数字比（#229），日期样式的文本框按年月日比（#399）。节点被页面替换的，都算未确认。
           filled = element.element.isConnected && (element.pickerType
             ? Boolean(controlOperator?.check(element)?.ok)
-            : sameTextValue(element.element, String(element.element.value ?? ""), normalizeExpectedTextValue(element.element, match.value)));
+            : showsPreparedText(element.element, String(element.element.value ?? ""), match.value));
         }
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
@@ -2961,7 +2975,7 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite, { fill: true });
             stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
@@ -2977,6 +2991,12 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
+          // #399 #405 写入被拒的文本框：前 3 个看满 1 秒有没有冒出弹层再填下一个，免得把下一个字段的弹层算到它头上。
+          // 再往后的不等：下一个字段开始时停下，没看到弹层就不报。按停止时马上不等（见停止按钮）。
+          if (!assisted && TEXT_REJECTED.has(textFillFailureCode(element)) && overlayWaits < OVERLAY_WAITS) {
+            overlayWaits += 1;
+            await overlayWatches.get(element.element)?.settled;
+          }
           // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
           if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
@@ -3499,7 +3519,7 @@
       if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
       const shown = String(el.value ?? "");
       if (entry.pickerType || entry.controlKind === "date") return sameDateAsPage(shown, value);
-      return shown === normalizeExpectedTextValue(el, value);
+      return showsPreparedText(el, shown, value);
     } catch {
       return false;
     }
@@ -4389,7 +4409,7 @@
 
   // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
   // 就是写上了，不能当成没写上，也不能恢复成写之前的值。
-  const PHONE_HINT = /手机|电话|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
+  const PHONE_HINT = /手机|电话|联系方式|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
 
   function phoneDigits(text) {
     const digits = String(text ?? "").replace(/[\s-]/g, "").replace(/^\+86/, "").replace(/^86(?=1\d{10}$)/, "");
@@ -4411,7 +4431,187 @@
       return true;
     }
     const digits = phoneDigits(current);
-    return Boolean(digits) && digits === phoneDigits(expected) && isPhoneInput(element);
+    if (digits && digits === phoneDigits(expected) && isPhoneInput(element)) {
+      return true;
+    }
+    return sameDateText(current, expected) && isDateLikeText(element);
+  }
+
+  // #399 日期样式的文本框（简道云的「出生年月」不是认得出的日期组件，按文本框填）：组件失焦后常按自己的格式改写，
+  // 1998-06 变成 1998-06-01、1998/06。按年月日比是同一天就是写上了。只认整段就是一个日期的写法。
+  const DATE_TEXT_HINT = /出生|生日|日期|年月|时间|date|birth|time/i;
+
+  function parseDateText(text) {
+    const s = String(text ?? "").normalize("NFKC").trim();
+    const dashed = /^(\d{4})([-/.])(\d{1,2})(?:\2(\d{1,2}))?$/.exec(s);
+    const written = /^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号]?)?$/.exec(s);
+    const year = /^(\d{4})\s*年?$/.exec(s);
+    const [y, m, d] = dashed ? [dashed[1], dashed[3], dashed[4]] : written ? written.slice(1, 4) : year ? [year[1]] : [];
+    if (!y || +y < 1900 || +y > 2100 || (m && (+m < 1 || +m > 12)) || (d && (+d < 1 || +d > 31))) {
+      return null;
+    }
+    return { y, m: m ? m.padStart(2, "0") : null, d: d ? d.padStart(2, "0") : null };
+  }
+
+  // 按页面显示的精度比：只到月就比年月；到日时，资料只有年月按 1 日（和日历选 1 号一致）。只有年的不比。
+  function sameDateText(shown, wanted) {
+    const page = parseDateText(shown);
+    const want = parseDateText(wanted);
+    if (!page?.m || !want?.m || page.y !== want.y || page.m !== want.m) {
+      return false;
+    }
+    return !page.d || page.d === (want.d || "01");
+  }
+
+  function isDateLikeText(element) {
+    if (!(element instanceof HTMLInputElement) || !isTextControl(element)) {
+      return false;
+    }
+    return Boolean(datePlaceholderFormat(element)) || DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`);
+  }
+
+  // 占位提示写明的日期格式：YYYY-MM-DD、yyyy/mm、YYYY年MM月、YYYYMMDD 这类，或只给了一个示例日期（例：2020.09）。
+  // 带时分的、写了两个日期的（起止）不算。
+  function datePlaceholderFormat(element) {
+    const hint = String(element?.getAttribute?.("placeholder") || "").normalize("NFKC");
+    // 月、日写在年前面的（MM/DD/YYYY）也不认。
+    if (!hint || /h{1,2}\s*:\s*m{1,2}|\d{1,2}:\d{2}/i.test(hint) || (hint.match(/y{4}/gi) || []).length > 1
+      || /(?<![a-z])[md]{1,2}\s*[-/.]\s*(?:[md]{1,2}\s*[-/.]\s*)?y{4}/i.test(hint)) {
+      return null;
+    }
+    const pattern = /(?<![a-z])y{4}(?:([-/.])(m{1,2})(?:\1(d{1,2}))?|年(m{1,2})月(?:(d{1,2})日)?|(mm)(dd)?)?(?![a-z])/i.exec(hint);
+    if (pattern) {
+      const month = pattern[2] || pattern[4] || pattern[6];
+      const day = pattern[3] || pattern[5] || pattern[7];
+      return { sep: pattern[4] ? "年" : pattern[1] || "", precision: day ? "day" : month ? "month" : "year", pad: !month || month.length === 2 };
+    }
+    // 只给了示例的，框本身得是填日期的（题目、name 或占位提示里有日期、时间这类词），示例也得是一个真日期：
+    // 「期望月薪」的「如：2000.50」是金额。
+    const examples = hint.match(/(?<!\d)(?:19|20)\d{2}(?:([-/.])\d{1,2}(?:\1\d{1,2})?|年\d{1,2}月(?:\d{1,2}日)?)(?!\d)/g) || [];
+    if (examples.length !== 1 || !parseDateText(examples[0]) || !DATE_TEXT_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`)) {
+      return null;
+    }
+    const example = /^\d{4}(?:([-/.])(\d{1,2})(?:\1(\d{1,2}))?|年(\d{1,2})月(?:(\d{1,2})日)?)$/.exec(examples[0]);
+    const month = example[2] || example[4];
+    return { sep: example[4] ? "年" : example[1], precision: example[3] || example[5] ? "day" : "month", pad: month.length === 2 };
+  }
+
+  // 按占位提示的格式重写资料里的日期。资料只有年月、框要到日时按 1 日（dayDefaulted，状态栏会说明）；认不出的不改。
+  function formatDateText(text, format) {
+    const date = parseDateText(text);
+    if (!date || (format.precision !== "year" && !date.m)) {
+      return null;
+    }
+    if (format.precision === "year") {
+      return { value: date.y };
+    }
+    const part = (value) => format.pad ? value : String(Number(value));
+    const parts = [date.y, part(date.m)];
+    if (format.precision === "day") {
+      parts.push(part(date.d || "01"));
+    }
+    const value = format.sep === "年" ? `${parts[0]}年${parts[1]}月${parts[2] ? `${parts[2]}日` : ""}` : parts.join(format.sep);
+    return format.precision === "day" && !date.d ? { value, dayDefaulted: true } : { value };
+  }
+
+  // #405 数字框（type=number，或 inputmode 是 numeric / decimal）：type=number 会直接清掉不是数字的字，受控组件也常把它们滤掉，
+  // 写进去只会被拒或剩下拼起来的数字。资料带单位的，只在能放心取出时写数字：一个数加一个常见单位（175cm、65 公斤、8000 元/月、3 年），
+  // 而且题目或占位提示没写明别的单位（身高（m）、月薪（千元）、月薪（美元））、别的周期（期望月薪配 8000 元/年）。
+  // 范围、带 k / 万、几个数的都不写，报 format_mismatch 让用户手填。
+  const NUMBER_UNITS = [["cm", "厘米", "公分"], ["kg", "公斤", "千克"], ["元", "rmb", "人民币"], ["岁", "周岁"], ["年"],
+    ["个月", "月"], ["周", "星期"], ["天"], ["小时"], ["分"]];
+  // 题目里写明这些单位时，资料里的单位对不上就不取：取出的数字意思变了。
+  const STATED_UNITS = new Set([...NUMBER_UNITS.flat(), "m", "米", "mm", "毫米", "斤", "g", "克", "千", "千元", "k", "万", "万元", "w", "%"]);
+  // 规则表外、一看就是单位的写法：别的币种（美元、港币、万美元、$）和英制、公里这类。题目写明了这些，资料里的单位总对不上。
+  const OTHER_UNIT = /^(?:[\u4e00-\u9fa5]{0,3}[元币]|美金|英镑|[$€£]|us\$|usd|hkd|eur|gbp|jpy|sgd|英寸|英尺|英里|公里|千米|分米|磅|inch|in|ft|lbs?|km)$/;
+  const unitHintText = (element) => `${element.getAttribute?.("placeholder") || ""} ${element.getAttribute?.("aria-label") || ""} ${getFieldLabel(element)}`
+    .normalize("NFKC").toLowerCase();
+
+  function numericInputKind(element) {
+    if (String(element.type || "").toLowerCase() === "number") {
+      return "number";
+    }
+    return ["numeric", "decimal"].includes(String(element.getAttribute?.("inputmode") || "").trim().toLowerCase()) ? "mode" : "";
+  }
+
+  // 题目、占位提示里括号中或「单位：」后面写明的单位，规则表外的（美元）也记下。括号里还带别的话的（m，必填）按逗号、顿号分段看。
+  function statedUnits(element) {
+    const units = [];
+    for (const hit of unitHintText(element).matchAll(/\(\s*([^()]{1,20}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
+      for (const part of (hit[1] || hit[2]).split(/\s*[,、;]\s*/)) {
+        const unit = part.replace(/^单位\s*:?\s*(?:为|是)?\s*/, "").replace(/\s*(?:\/|每)\s*(?:月|年)$/, "");
+        if (STATED_UNITS.has(unit) || OTHER_UNIT.test(unit)) units.push(unit);
+      }
+    }
+    return units;
+  }
+
+  // 题目、占位提示写明的周期：按月（月薪、元/月、每月）还是按年（年薪、元/年）。都没写的是空的。
+  function statedPeriods(element) {
+    const text = unitHintText(element);
+    return [["月", /月薪|月收入|月工资|(?:\/|每)\s*月|monthly|per month/], ["年", /年薪|年收入|年工资|年包|(?:\/|每)\s*年|annual|yearly|per year/]]
+      .filter(([, pattern]) => pattern.test(text)).map(([period]) => period);
+  }
+
+  // 能放心写进数字框的数字；取不出返回 null。
+  function numericText(element, text) {
+    const raw = String(text ?? "").normalize("NFKC").trim();
+    if (!raw || /^-?\d+(?:\.\d+)?$/.test(raw)) {
+      return raw;
+    }
+    if (isPhoneInput(element) && phoneDigits(raw)) {
+      return phoneDigits(raw);
+    }
+    const hit = /^(¥\s*)?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*([^\d\s.,][^\d]*)?$/.exec(raw);
+    if (!hit) {
+      return null;
+    }
+    const number = `${hit[2].replace(/,/g, "")}${hit[3] || ""}`;
+    const suffix = String(hit[4] || "").trim().toLowerCase();
+    // 资料写了按月还是按年（8000 元/年），题目写明的周期对不上：8000 写进月薪的框意思就错了。
+    const period = /(?:\/|每)\s*(月|年)$/.exec(suffix)?.[1];
+    const periods = period ? statedPeriods(element) : [];
+    if (periods.length && !periods.includes(period)) {
+      return null;
+    }
+    const unit = suffix.replace(/\s*(?:\/|每)\s*(?:月|年)$/, "") || (hit[1] ? "元" : "");
+    if (!unit) {
+      return number;
+    }
+    const group = NUMBER_UNITS.find((words) => words.includes(unit));
+    if (!group || (hit[1] && unit !== "元")) {
+      return null;
+    }
+    return statedUnits(element).every((stated) => group.includes(stated)) ? number : null;
+  }
+
+  // #399 #405 一键填写写之前按框的要求整理要写的字（控件层写之前调用；侧栏、字段卡片手动写入不整理）。
+  // 返回 { value }，日期按 1 日补齐的带 dayDefaulted。type=number 里取不出数字的返回 { reason: "format_mismatch" }，不写。
+  // inputmode 只是给手机键盘的提示，很多框什么都收：先照原样写，numeric 是页面没收下时改写的数字（取不出是 null）。
+  function prepareTextValue(element, value) {
+    const text = String(value ?? "");
+    if (!(element instanceof HTMLInputElement)) {
+      return { value: text };
+    }
+    const format = datePlaceholderFormat(element);
+    const prepared = (format && formatDateText(text, format)) || { value: text };
+    const numeric = numericInputKind(element);
+    if (!numeric) {
+      return prepared;
+    }
+    const number = numericText(element, prepared.value);
+    if (numeric === "number") {
+      return number === null ? { reason: "format_mismatch" } : { ...prepared, value: number };
+    }
+    return number === prepared.value.normalize("NFKC").trim() ? prepared : { ...prepared, numeric: number };
+  }
+
+  // 框里显示的是不是一键填写写进去的字：按 prepareTextValue 整理过的，或 inputmode 数字框改写过的数字。
+  function showsPreparedText(element, shown, value) {
+    const prepared = prepareTextValue(element, value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    return sameTextValue(element, shown, normalizeExpectedTextValue(element, typed))
+      || (typeof prepared.numeric === "string" && sameTextValue(element, shown, prepared.numeric));
   }
 
   function inspectTextCommit(element, expected, committedBeforeWait) {
@@ -4471,7 +4671,7 @@
     if (!controlOperator) controlOperator = self.ResumeProControls.create({
       helpers: self.ResumeProAIHelpers, radioLabel: getRadioOptionLabel,
       isVisible, writeValue: writeControlValue, focus: focusControl, blur: blurControl,
-      normalizeText: normalizeExpectedTextValue, runTextLifecycle, sameTextValue,
+      normalizeText: normalizeExpectedTextValue, prepareText: prepareTextValue, runTextLifecycle, sameTextValue,
       inspectText: inspectTextCommit, waitTextCommit: waitForTextCommit,
       replayFocusBlur, prefersSequential: prefersSequentialInput, dispatchTextInput,
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
@@ -4496,10 +4696,123 @@
     return ["custom-select", "cascader"].includes(observed?.controlKind) && ["options_not_rendered", "cascade_timeout"].includes(reason)
       ? { opened: "none" } : null;
   }
-  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
-    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
+
+  // #399 #405 写入被拒（值没有写上、被页面退回）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
+  // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
+  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted"]);
+  const textLeftovers = new WeakMap();
+  // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
+  const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",
+    ...["dropdown", "popper", "popover", "popup", "suggest", "autocomplete", "picker-panel", "picker-dropdown", "picker-container",
+      "datepicker", "date-picker", "calendar", "laydate", "toast", "tooltip", "modal"].map((word) => `[class*='${word}' i]`),
+    ".el-message", ".ant-message"].join(", ");
+  let overlayWindowMs = 1000;
+  // 整页都写不上时不能每个框都多等 1 秒：只等前几个，诊断看这几个就够了。
+  const OVERLAY_WAITS = 3;
+  let overlayWatch = null;
+  const overlayWatches = new WeakMap();
+
+  function rememberLeftover(target, result) {
+    const control = target?.kind === "element" ? target.element : target;
+    if (!control || typeof control !== "object") return;
+    if (TEXT_REJECTED.has(result?.reason) && result.observed?.after) textLeftovers.set(control, { after: result.observed.after, session: fillSession });
+    else textLeftovers.delete(control);
+  }
+
+  const overlayWords = (element) => `${element.getAttribute?.("role") || ""} ${typeof element.className === "string" ? element.className : ""}`;
+  // 日历：带 picker、calendar、laydate，或 date / datetime 单独成词（x-datetime-content、DatePanel）。
+  // candidate、update、validate 里的 date 不算。
+  const isCalendarOverlay = (element) => {
+    const words = overlayWords(element);
+    return /picker|calendar|laydate/i.test(words) || /(?<![a-z])date(?:time)?(?![a-z])/i.test(words.replace(/([a-z])(?=[A-Z])/g, "$1 "));
+  };
+
+  // 日期面板、日历算别的弹层；下拉、联想建议算建议框。
+  function overlayKind(element) {
+    if (isCalendarOverlay(element)) return "other";
+    return /listbox|menu|tree|dropdown|suggest|autocomplete|select|option/i.test(overlayWords(element)) ? "list" : "other";
+  }
+
+  // #399 简道云的日期框失焦后把 1998-06 显示成 1998-06-01，日历却不收起：要点日子或在别处按下鼠标，表单才收下。
+  // 框里只是年月日相同（被改写过）、这次弹出的日历过了收起动画的时间还开着，就不算写上。
+  let calendarCloseMs = 500;
+  async function calendarKeptOpen(watch, element, value) {
+    const prepared = prepareTextValue(element, value);
+    const typed = prepared.reason ? String(value ?? "") : prepared.value;
+    const shown = String(element.value ?? "");
+    if (shown === normalizeExpectedTextValue(element, typed) || !sameDateText(shown, typed) || !watch.calendarOpen()) {
+      return false;
+    }
+    for (let waited = 0; waited < calendarCloseMs; waited += 50) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      if (!watch.calendarOpen()) return false;
+    }
+    return true;
+  }
+
+  // 从开始填这个框起看 1 秒：结果是 list / other / none；没看完时 kind() 是 null。
+  // 下一个字段开始填写时停下（stop(true)），免得把下一个字段的弹层算到这个框头上；这时还没看到弹层的，不说 none。
+  function watchOverlays(control) {
+    const visibleOverlays = () => {
+      try {
+        return Array.from(document.querySelectorAll(OVERLAY_SELECTOR))
+          .filter((node) => !node.contains(control) && !node.closest(`#${SIDEBAR_ID}`) && isVisible(node));
+      } catch {
+        return [];
+      }
+    };
+    const before = new Set(visibleOverlays());
+    let kind = null;
+    let done = false;
+    let pending = null;
+    let observer = null;
+    let timer = null;
+    let finish;
+    const settled = new Promise((resolve) => { finish = resolve; });
+    const look = () => {
+      const fresh = visibleOverlays().filter((node) => !before.has(node));
+      if (fresh.length) kind = fresh.some((node) => overlayKind(node) === "list") ? "list" : "other";
+      return Boolean(kind);
+    };
+    const stop = (early = false) => {
+      if (done) return;
+      done = true;
+      observer?.disconnect();
+      window.clearTimeout(timer);
+      window.clearTimeout(pending);
+      if (!look() && !early) kind = "none";
+      finish();
+    };
+    timer = window.setTimeout(stop, overlayWindowMs);
+    try {
+      observer = new MutationObserver(() => {
+        if (pending === null) pending = window.setTimeout(() => { pending = null; if (!done && look()) stop(); }, 30);
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden"] });
+    } catch {
+      // 没有 MutationObserver 时只在结束时看一次。
+    }
+    const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
+    return { kind: () => kind, settled, stop, calendarOpen };
+  }
+
+  // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
+  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite, { fill = false } = {}) {
     const control = target?.kind === 'element' ? target.element : target;
+    // 文本框才看弹层；不等文字提交时（测试）不看。
+    overlayWatch?.stop(true);
+    overlayWatch = fill && textCommitWaitMs > 0 && control instanceof HTMLElement && !target?.pickerType
+      && !["custom-select", "cascader", "date", "date-picker"].includes(target?.controlKind) && isTextControl(control) ? watchOverlays(control) : null;
+    const watch = overlayWatch;
+    // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
+    if (watch) overlayWatches.set(control, watch);
+    else if (control && typeof control === 'object') overlayWatches.delete(control);
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
+    if (result.ok && watch && control instanceof HTMLInputElement && await calendarKeptOpen(watch, control, value)) {
+      result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
+    }
     if (control && typeof control === 'object') {
+      rememberLeftover(control, result);
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
       // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
@@ -7196,6 +7509,14 @@
       setTextCommitWaitMs(ms) {
         textCommitWaitMs = ms;
       },
+      setOverlayWindowMs(ms) {
+        overlayWindowMs = ms;
+      },
+      setCalendarCloseMs(ms) {
+        calendarCloseMs = ms;
+      },
+      prepareTextValue,
+      sameTextValue,
       textFillFailureReason(element) {
         const control = element?.kind === "element" ? element.element : element;
         return textFillFailures.get(control) || "";
