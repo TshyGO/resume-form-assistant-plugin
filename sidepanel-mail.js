@@ -31,7 +31,7 @@
     open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
     multiple_messages: '当前会话展开了多封邮件，请只展开要保存的一封后重试。',
     message_clipped: '正文被 Gmail 截断，不能保存为完整摘录。请在该封邮件菜单打开“显示原始邮件”后保存原件，或下载 .eml 在桌面导入。',
-    account_unavailable: '无法确认当前 Gmail 账号，请刷新邮箱后重试，或下载 .eml 在桌面导入。',
+    account_unavailable: '无法确认当前 Gmail 账号。请回到普通阅读页或“查看完整邮件”页保存；也可下载 .eml 在桌面导入。',
     original_unavailable: '未取得完整邮件原件，请使用 Gmail 的下载原始邮件后在桌面导入。',
     unrecognized_mail: '检测到邮件标题，但无法确认当前邮件的完整阅读区域。请等待加载完成后重试；仍失败时可下载 .eml 在桌面导入。',
     changed: '读取期间邮件已切换，请重新点击保存。',

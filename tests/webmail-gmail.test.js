@@ -27,7 +27,9 @@ function gmail({ cards = card(), path = URL, extra = '', profile = 'Google Ë¥¶Âè
 }
 function link(id = LEGACY, options = '') { return `<a href="?view=att&th=${id}&attid=0&disp=comp&safe=1${options}">Download message</a>`; }
 function original(options = '') {
-  return new JSDOM(`<h1>Original Message</h1><a download="original.eml" href="?view=att&th=${LEGACY}&attid=0&disp=comp&safe=1${options}">Download Original</a><pre>raw message display, not reconstructed into MIME</pre>`, { url: `https://mail.google.com/mail/u/0/?view=om&th=${LEGACY}&ik=synthetic-session` }).window.document;
+  const d = new JSDOM(`<h1>Original Message</h1><a download="original.eml" href="?view=att&th=${LEGACY}&attid=0&disp=comp&safe=1${options}">Download Original</a><pre>raw message display, not reconstructed into MIME</pre>`, { url: `https://mail.google.com/mail/u/0/?view=om&th=${LEGACY}&ik=synthetic-session` }).window.document;
+  d.defaultView.opener = gmail().defaultView;
+  return d;
 }
 
 test('Gmail routes accept exact HTTPS desktop mail hosts and reject lookalikes/login/mobile', () => {
@@ -203,6 +205,7 @@ test('observed Gmail original-page links may omit the account-path trailing slas
   const d = new JSDOM(`<h3>Original Message</h3><a href="https://mail.google.com/mail/u/0?view=att&th=${LEGACY}&attid=0&disp=comp&safe=1&zw">Download Original</a>`, {
     url: `https://mail.google.com/mail/u/0/?ik=synthetic&view=om&permmsgid=${PERM}`,
   }).window.document;
+  d.defaultView.opener = gmail().defaultView;
   let calls = 0;
   const got = await capture(d, async url => { calls++; assert.equal(new globalThis.URL(url).pathname, '/mail/u/0/'); return new Response(RAW); });
   assert.equal(webmail.provider('https://mail.google.com/mail/u/0?view=om'), 'gmail');
@@ -240,4 +243,115 @@ test('the verified native route lets the ordinary Gmail card fetch a complete or
   const got=await capture(d,async url=>{requested=new globalThis.URL(url);return new Response(RAW);});
   assert.equal(got.status,'original'); assert.equal(requested.pathname,'/mail/u/0/'); assert.equal(requested.searchParams.get('th'),LEGACY);
   assert.deepEqual([...requested.searchParams.keys()].sort(),['attid','disp','safe','th','view','zw']);
+});
+
+test('own-email authuser is verified on the page and normalized to the downloader account index', async () => {
+  const d = gmail({ cards: card({ extra: link(LEGACY, '&authuser=applicant%40example.test') }) });
+  const source = await webmail.capture(d);
+  const candidate = source.originals.find(value => new globalThis.URL(value).searchParams.has('authuser'));
+  assert.ok(candidate); assert.equal(new globalThis.URL(candidate).searchParams.get('authuser'), '0');
+  assert.ok(transport.requestContext(candidate));
+  assert.ok(source.originals.every(value => transport.requestContext(value)));
+  assert.doesNotMatch(JSON.stringify(source), /applicant%40example|applicant@example/);
+  webmail.discardGmail(d, source.target);
+});
+test('the verified route is retained first even when the page offers more than three distinct raw links', async () => {
+  const links = ['&ui=1', '&ui=2', '&zw=', '&d=1'].map(options => link(LEGACY, options)).join('');
+  const d = gmail({ cards: card({ extra: links }) });
+  const source = await webmail.capture(d);
+  const fixed = webmail.rawCandidates(webmail.opened(gmail(), 'gmail'), 'gmail')[0];
+  assert.equal(source.originals.length, 3); assert.equal(source.originals[0], fixed);
+  let calls = 0;
+  const result = await transport.resolveSource(source, async url => {
+    calls++; return transport.fetchOriginal(url, async () => {
+      const response = new Response(RAW); Object.defineProperty(response, 'url', {value:fixed}); return response;
+    }, webmail);
+  }, consume => webmail.validateGmail(d, source.target, consume).status === 'current');
+  assert.equal(result.status, 'original'); assert.equal(calls, 1);
+});
+test('raw-message headers cannot identify the signed-in owner when the live opener is absent or invalid', async () => {
+  for (const opener of [null, {closed:true}, {document:gmail({path:'https://mail.google.com/mail/u/1/#inbox/other'})},
+    {document:gmail({path:'https://mail.googlemail.com/mail/u/0/#inbox/other'})},
+    {document:gmail({profile:'Unknown'})}]) {
+    const d = original(); d.defaultView.opener = opener;
+    d.querySelector('pre').textContent = 'To: applicant@example.test\nFrom: hr@example.test';
+    let calls = 0;
+    assert.equal((await capture(d, () => {calls++;})).status, 'account_unavailable');
+    assert.equal(calls, 0);
+  }
+});
+test('same-route opener account changes, reloads and closure invalidate raw-page captures before transfer', async () => {
+  for (const mutate of [
+    d => {d.defaultView.opener.document.querySelector('header a').setAttribute('aria-label', 'Google Account: other@example.test');},
+    d => {d.defaultView.opener = gmail().defaultView;},
+    d => {d.defaultView.opener = null;},
+    d => {d.defaultView.opener.document.defaultView.history.replaceState({}, '', '/mail/u/1/#inbox/other');},
+  ]) {
+    const d = original();
+    const got = await capture(d, async () => { mutate(d); return new Response(RAW); });
+    assert.equal(got.status, 'changed'); assert.equal(got.bytesBase64, undefined);
+  }
+});
+test('an original page can bind the observed full-reader owner without exposing account data', async () => {
+  const d = original(); d.defaultView.opener = fullMessage().defaultView;
+  const got = await capture(d, async () => new Response(RAW));
+  assert.equal(got.status, 'original');
+  assert.doesNotMatch(JSON.stringify(got), /applicant@example|synthetic-session/);
+  assert.equal(webmail.validateGmail(d, got.target).status, 'current');
+});
+
+function controlledAdapter() {
+  let next = 0;
+  const intervals = new Map(), deadlines = new Map();
+  const context = { module:{exports:{}}, URL:globalThis.URL, URLSearchParams:globalThis.URLSearchParams, TextEncoder, fetch:()=>{},
+    setInterval(fn) {const id=++next;intervals.set(id,fn);return id;}, clearInterval(id) {intervals.delete(id);},
+    setTimeout(fn) {const id=++next;deadlines.set(id,fn);return id;}, clearTimeout(id) {deadlines.delete(id);} };
+  context.self = context;
+  vm.runInNewContext(fs.readFileSync(require.resolve('../webmail.js'), 'utf8'), context);
+  return { api:context.module.exports, intervals, deadlines };
+}
+test('hash, history traversal, pagehide and modern navigation immediately release target resources', async () => {
+  for (const event of ['hashchange', 'popstate', 'pagehide', 'navigate']) {
+    const h = controlledAdapter(), d = gmail();
+    const navigation = new d.defaultView.EventTarget();
+    if (event === 'navigate') Object.defineProperty(d.defaultView, 'navigation', {value:navigation});
+    const source = await h.api.capture(d);
+    assert.equal(h.deadlines.size, 1);
+    if (event === 'navigate') assert.equal(h.intervals.size, 0);
+    (event === 'navigate' ? navigation : d.defaultView).dispatchEvent(new d.defaultView.Event(event));
+    assert.equal(h.api.validateGmail(d, source.target).status, 'changed');
+    assert.equal(h.intervals.size, 0); assert.equal(h.deadlines.size, 0);
+  }
+});
+test('legacy pushState and replaceState URL guards release snapshots without inspecting mail', async () => {
+  for (const method of ['pushState', 'replaceState']) {
+    const h = controlledAdapter(), d = gmail();
+    const source = await h.api.capture(d); const before = d.location.href;
+    d.defaultView.history[method]({}, '', '/mail/u/0/?view=om&th=18abcdef12345679');
+    Object.defineProperty(d, 'querySelectorAll', {value() {throw new Error('URL guard must not read mail');},configurable:true});
+    for (const poll of [...h.intervals.values()]) poll();
+    d.defaultView.history.replaceState({}, '', before);
+    assert.equal(h.api.validateGmail(d, source.target).status, 'changed');
+    assert.equal(h.intervals.size, 0); assert.equal(h.deadlines.size, 0);
+  }
+});
+test('check, cancellation, expiry and a new capture release all temporary target listeners and timers', async () => {
+  const h = controlledAdapter(), d = gmail();
+  const first = await h.api.capture(d);
+  const second = await h.api.capture(d);
+  assert.equal(h.api.validateGmail(d, first.target).status, 'changed');
+  assert.equal(h.intervals.size, 1); assert.equal(h.deadlines.size, 1);
+  h.api.discardGmail(d, second.target);
+  assert.equal(h.intervals.size, 0); assert.equal(h.deadlines.size, 0);
+  const third = await h.api.capture(d);
+  for (const expiry of [...h.deadlines.values()]) expiry();
+  assert.equal(h.api.validateGmail(d, third.target).status, 'changed');
+  assert.equal(h.intervals.size, 0); assert.equal(h.deadlines.size, 0);
+  const fourth = await h.api.capture(d);
+  const originalUrl = d.location.href;
+  d.defaultView.history.replaceState({}, '', '/mail/u/1/#inbox/other');
+  assert.equal(h.api.validateGmail(d, fourth.target, false).status, 'changed');
+  d.defaultView.history.replaceState({}, '', originalUrl);
+  assert.equal(h.api.validateGmail(d, fourth.target).status, 'changed');
+  assert.equal(h.intervals.size, 0); assert.equal(h.deadlines.size, 0);
 });

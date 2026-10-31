@@ -112,6 +112,11 @@
   // Gmail message cards and the native "Show original" page are separate
   // surfaces. Never treat an entire conversation or a quoted card as one mail.
   let gmailTarget = null;
+  function releaseGmail() {
+    const previous = gmailTarget;
+    gmailTarget = null;
+    previous?.dispose?.();
+  }
   function gmailRoute(doc) {
     try {
       const url = new URL(doc.location.href);
@@ -147,6 +152,9 @@
     }
     const user = url.searchParams.get('authuser');
     if (user && user !== route.index && user.toLowerCase() !== ctx.account) return null;
+    // The page verified an email-form authuser against its native account
+    // control. Pass only the equivalent path index to the restricted downloader.
+    if (user) url.searchParams.set('authuser', route.index);
     // Only the message's raw source, never a single attachment or an action.
     const view = url.searchParams.get('view');
     if (view !== 'att' || url.searchParams.get('attid') !== '0' || url.searchParams.get('disp') !== 'comp') return null;
@@ -210,11 +218,13 @@
       const perm = route.url.searchParams.get('permmsgid') || '';
       const ids = { legacy: /^[a-f0-9]{12,32}$/i.test(legacy) ? legacy.toLowerCase() : '', perm: /^msg-[af]:[\w-]{1,128}$/.test(perm) ? perm : '' };
       if ((!ids.legacy && !ids.perm) || !gmailMessageIds(ids)) return { status: 'unrecognized_mail' };
+      const owner = gmailOriginalAccount(doc, route);
+      if (!owner) return { status: 'account_unavailable' };
       const links = [...doc.querySelectorAll('a[href]')].filter(link => shown(link) && !link.closest('pre, textarea, .raw_message, .a3s')
         && (link.hasAttribute('download') || /download\s+original|下载原始邮件|下載原始郵件|下载原文|下載原文/i.test(text(link))));
-      const ctx = { doc, body: doc.body, title: doc.body, ids, account: route.index, originalPage: true,
+      const ctx = { doc, body: doc.body, title: doc.body, ids, account: owner.account, accountDocument: owner.doc, originalPage: true,
         data: { subject: 'Gmail 邮件原件', from: '', sentTime: '', body: '' }, links };
-      ctx.fingerprint = JSON.stringify([route.url.href, links.map(link => link.getAttribute('href'))]);
+      ctx.fingerprint = JSON.stringify([route.url.href, owner.account, links.map(link => link.getAttribute('href'))]);
       return { ctx };
     }
     // Search the unique visible Gmail reading surface, not inbox rows, drafts,
@@ -257,21 +267,63 @@
     ctx.fingerprint = JSON.stringify([route.url.href, account, ids, data, clipped]);
     return { ctx };
   }
+  function gmailOriginalAccount(doc, route) {
+    // Raw-message headers identify sender/recipient, never the signed-in owner.
+    // Use only a live same-origin opener's native mailbox account control.
+    try {
+      const opener = doc.defaultView.opener;
+      if (!opener || opener.closed) return null;
+      const source = opener.document, sourceRoute = gmailRoute(source);
+      if (!sourceRoute || sourceRoute.url.origin !== route.url.origin || sourceRoute.index !== route.index
+          || sourceRoute.url.searchParams.get('view') === 'om') return null;
+      if (sourceRoute.url.searchParams.get('view') === 'lg') {
+        const account = gmailFullMessage(source, sourceRoute).ctx?.account;
+        return account ? { account, doc: source } : null;
+      }
+      const mains = [...source.querySelectorAll('main, [role="main"]')].filter(shown);
+      const account = mains.length === 1 ? gmailAccount(source, mains[0]) : null;
+      return account ? { account, doc: source } : null;
+    } catch { return null; }
+  }
   function rememberGmail(ctx, result) {
+    releaseGmail();
     const target = ctx.doc.defaultView.crypto.randomUUID();
-    gmailTarget = { doc: ctx.doc, target, fingerprint: ctx.fingerprint, body: ctx.body, title: ctx.title };
+    const view = ctx.doc.defaultView;
+    const url = ctx.doc.location.href;
+    const clear = () => releaseGmail();
+    for (const event of ['pagehide', 'hashchange', 'popstate']) view.addEventListener(event, clear);
+    view.navigation?.addEventListener('navigate', clear);
+    // Older engines lack Navigation API events for pushState/replaceState.
+    // While a proposal exists, inspect only its URL, never poll mail content.
+    const watcher = !view.navigation?.addEventListener ? root.setInterval(() => {
+      if (ctx.doc.location.href !== url) releaseGmail();
+    }, 250) : null;
+    watcher?.unref?.();
+    const expiry = root.setTimeout(clear, 5 * 60 * 1000);
+    expiry?.unref?.();
+    gmailTarget = { doc: ctx.doc, target, url, fingerprint: ctx.fingerprint, body: ctx.body, title: ctx.title,
+      accountDocument: ctx.accountDocument || ctx.doc,
+      dispose() {
+        for (const event of ['pagehide', 'hashchange', 'popstate']) view.removeEventListener(event, clear);
+        view.navigation?.removeEventListener('navigate', clear);
+        if (watcher !== null) root.clearInterval(watcher);
+        root.clearTimeout(expiry);
+      } };
     return { ...result, target };
   }
   function validateGmail(doc, target, consume = true) {
     if (!gmailTarget || gmailTarget.doc !== doc || gmailTarget.target !== target) return { status: 'changed' };
     const snapshot = gmailTarget;
-    if (consume) gmailTarget = null; // Acceptance consumes the one-use binding.
+    if (consume) releaseGmail(); // Acceptance consumes the one-use binding.
+    if (doc.location.href !== snapshot.url) { releaseGmail(); return { status: 'changed' }; }
     const current = inspectGmail(doc).ctx;
-    return { status: current && current.body === snapshot.body && current.title === snapshot.title
-      && current.fingerprint === snapshot.fingerprint ? 'current' : 'changed' };
+    const matches = current && current.body === snapshot.body && current.title === snapshot.title
+      && (current.accountDocument || doc) === snapshot.accountDocument && current.fingerprint === snapshot.fingerprint;
+    if (!matches) releaseGmail();
+    return { status: matches ? 'current' : 'changed' };
   }
   function discardGmail(doc, target) {
-    if (gmailTarget?.doc === doc && gmailTarget.target === target) gmailTarget = null;
+    if (gmailTarget?.doc === doc && gmailTarget.target === target) releaseGmail();
     return { status: 'discarded' };
   }
   function opened(doc, name) {
@@ -337,7 +389,7 @@
         // this card's message ID/account path, never a Cookie or hidden token.
         const url = new URL(route.path, route.url.origin);
         url.search = new URLSearchParams({ view: 'att', th: [...ids][0], attid: '0', disp: 'comp', safe: '1', zw: '' }).toString();
-        urls.push(url.href);
+        urls.unshift(url.href); // Always retain the verified route within the attempt budget.
       }
       return [...new Set(urls)];
     }
@@ -441,7 +493,7 @@
   async function capture(doc, fetcher = root.fetch.bind(root), requestQQ = message => root.chrome.runtime.sendMessage(message)) {
     const name = provider(doc.location.href);
     if (!name) return { status: 'unsupported' };
-    if (name === 'gmail') gmailTarget = null;
+    if (name === 'gmail') releaseGmail();
     const inspection = name === 'gmail' ? inspectGmail(doc) : null;
     if (inspection?.status) return { status: inspection.status };
     const ctx = inspection?.ctx || opened(doc, name);
@@ -499,10 +551,6 @@
     if (typeof module === 'object' && module && typeof module.exports === 'object') module.exports = api;
   } catch { /* A page element or cross-origin frame may be named module (#275). */ }
   if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage && root.window === root && root.top === root && provider(root.location?.href)) {
-    if (provider(root.location.href) === 'gmail') {
-      root.addEventListener?.('pagehide', () => { gmailTarget = null; });
-      root.addEventListener?.('hashchange', () => { gmailTarget = null; });
-    }
     chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (!['WEBMAIL_CAPTURE', 'WEBMAIL_VALIDATE', 'WEBMAIL_DISCARD', 'WEBMAIL_CHECK'].includes(message?.type)) return false;
       if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('') + 'sidepanel.html') {
