@@ -51,7 +51,7 @@
   // The worker writes the [来源] section (version, OS, install type, host) itself; a page cannot supply it.
   // [岗位] (#301) goes only into manual feedback, which the user previews; automatic reports drop it.
   const SECTIONS = new Set(["页面", "填写", "字段漏斗", "页面结构", "错误", "匹配", "性能", "未填字段", "岗位"]);
-  const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_blocked", "match_failed", "fill_rejected",
+  const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_same_origin", "iframe_cross_origin", "match_failed", "fill_rejected",
     "timeout", "service_error", "unknown", "none"];
   const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
     "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
@@ -178,8 +178,11 @@
   function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, catchUpCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
     if (!scanned) return { category: "unknown", stage: "scan" };
     if (fieldCount === 0) {
-      // A form may sit in a frame even when nothing else on the page looks like one.
-      if (frames?.crossOrigin > 0 || frames?.frameInputs > 0) return { category: "iframe_blocked", stage: "scan" };
+      // A form may sit in a frame even when nothing else on the page looks like one. Same-origin frames are
+      // scanned (#400), so inputs found there yet no field mean the scan missed them; a cross-origin frame
+      // stays out of reach. Inputs in a same-origin frame are the more specific clue.
+      if (frames?.frameInputs > 0) return { category: "iframe_same_origin", stage: "scan" };
+      if (frames?.crossOrigin > 0) return { category: "iframe_cross_origin", stage: "scan" };
       // A page that is not an application form has nothing to fix. When the probe is
       // missing we cannot tell, so the page is treated as a form that yielded no fields.
       return { category: pageType === "unknown" ? "page_not_supported" : "no_fields_found", stage: "scan" };

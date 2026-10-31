@@ -29,6 +29,7 @@
   ];
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const MAX_ANCESTORS = 4;
+  const MAX_FRAME_DEPTH = 2;
   const MAX_LABEL = 16;
   // 判断是不是网申填写页：地址里的强信号可以是子串（applyJob、myResume），form / profile 这类常见词要整词出现
   // （platform、information 不算）。职位详情、招聘首页（job、career、campus）不算填写页。
@@ -123,24 +124,40 @@
     return found.size;
   }
 
-  // 页面层面的线索：只数数，不输出内容。
-  function probePage(doc, { href = "" } = {}) {
-    const frames = Array.from(doc.querySelectorAll(SELECTORS.frames)).filter(sized);
-    let crossOrigin = 0;
-    let frameInputs = 0;
+  // 框架里的线索。同源框架再往下看一层（#400 一键填写最多进两层）。
+  function frameClues(doc, depth = 1) {
+    const clues = { total: 0, crossOrigin: 0, frameInputs: 0 };
+    let frames = [];
+    try {
+      frames = Array.from(doc.querySelectorAll(SELECTORS.frames)).filter(sized);
+    } catch {
+      return clues;
+    }
     for (const frame of frames) {
+      clues.total += 1;
       // 跨域框架读不到文档；同源框架正在跳转时查询也可能失败，都按读不到算，不能丢掉整份线索。
+      let inner = null;
       let inputs = null;
       try {
-        const inner = frame.contentDocument;
+        inner = frame.contentDocument;
         inputs = inner ? Array.from(inner.querySelectorAll(SELECTORS.inputs)).length : null;
       } catch {
         inputs = null;
       }
-      if (inputs === null) crossOrigin += 1;
-      else frameInputs += inputs;
+      if (inputs === null) {
+        clues.crossOrigin += 1;
+        continue;
+      }
+      clues.frameInputs += inputs;
+      if (depth >= MAX_FRAME_DEPTH) continue;
+      const nested = frameClues(inner, depth + 1);
+      for (const key of Object.keys(clues)) clues[key] += nested[key];
     }
+    return clues;
+  }
 
+  // 页面层面的线索：只数数，不输出内容。
+  function probePage(doc, { href = "" } = {}) {
     const byLibrary = {};
     let customTotal = 0;
     for (const control of shown(doc.querySelectorAll(SELECTORS.custom))) {
@@ -154,7 +171,7 @@
     const all = doc.querySelectorAll(SELECTORS.all);
     return {
       host: hostOf(href),
-      frames: { total: frames.length, crossOrigin, frameInputs },
+      frames: frameClues(doc),
       custom: { total: customTotal, byLibrary },
       editButtons: countEditControls(doc),
       // 只读的下拉输入框属于自定义控件，不算；禁用的输入框即使套在自定义控件里也照算。
@@ -235,9 +252,15 @@
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
   // notForm：pageType() 判断这不是网申填写页。form：判断是网申填写页；没有别的线索时多半还在加载，或要先点开某一块（#301）。
   // deepAvailable（#224）：侧栏有「深度分析本页」时，同源框架和自定义控件改指向它（它读得到）；跨域框架照旧。
+  // frameUntitled（#400）：一键填写进了同源框架，框架里看得见、却认不出题目的控件数（认成站内搜索、页头页脚的不算）。
+  // 有一张表单那么多（3 个）时，表单就在框架里，不再让用户先点「编辑」。
   // 不让用户去点「立即申请」「投递」这类按钮：在招聘网站上点一下可能就投出去了。
-  function emptyPageHint(probe, { notForm = false, form = false, deepAvailable = false } = {}) {
+  function emptyPageHint(probe, { notForm = false, form = false, deepAvailable = false, frameUntitled = 0 } = {}) {
     if (!probe) return "";
+    if (frameUntitled >= FORM_INPUTS) {
+      return `表单在网页的内嵌框架里，一键填写没认出字段。${deepAvailable
+        ? "可以试试下方的「深度分析本页」。" : "可以把侧栏的「填写诊断」复制给我们。"}`;
+    }
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
     if (notForm) {
@@ -288,7 +311,7 @@
     return lines;
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, uncountedControls, uncountedLocked, pageType, hasClues, emptyPageHint, formatReport };
+  const api = { SELECTORS, FORM_INPUTS, describeControl, safeLabel, probePage, uncountedControls, uncountedLocked, pageType, hasClues, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

@@ -11,6 +11,22 @@
     return clean;
   }
 
+  // #400 同源框架里的元素属于框架自己的 window：对这里的 HTMLInputElement 做 instanceof 是 false。
+  // 先按当前 window 的构造函数判断，再按元素所在 window 的。全局构造函数用到时才读（测试会在加载后换掉）。
+  function localType(name) {
+    if (name === 'HTMLInputElement') return typeof HTMLInputElement === 'function' ? HTMLInputElement : null;
+    if (name === 'HTMLSelectElement') return typeof HTMLSelectElement === 'function' ? HTMLSelectElement : null;
+    return typeof HTMLTextAreaElement === 'function' ? HTMLTextAreaElement : null;
+  }
+  function isA(node, name) {
+    if (!node || typeof node !== 'object') return false;
+    const Local = localType(name);
+    if (Local && node instanceof Local) return true;
+    const Own = node.ownerDocument?.defaultView?.[name];
+    return typeof Own === 'function' && Own !== Local && node instanceof Own;
+  }
+  const isInput = node => isA(node, 'HTMLInputElement');
+
   function create(deps = {}) {
     const helpers = deps.helpers || scope.ResumeProAIHelpers;
     const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -34,24 +50,24 @@
     } });
     function kindOf(entry, el) {
       if (entry?.kind === 'radio') return 'radio';
-      if (el instanceof HTMLSelectElement) return 'native-select';
-      if (el instanceof HTMLInputElement) {
+      if (isA(el, 'HTMLSelectElement')) return 'native-select';
+      if (isInput(el)) {
         if (['file', 'submit', 'button', 'reset', 'image', 'hidden', 'password'].includes(el.type)) return 'unsupported';
         if (['checkbox', 'radio'].includes(el.type)) return el.type;
         if (['date', 'month', 'datetime-local', 'time', 'week'].includes(el.type)) return 'date';
       }
-      if (el instanceof HTMLTextAreaElement) return 'textarea';
+      if (isA(el, 'HTMLTextAreaElement')) return 'textarea';
       if (entry?.controlKind && !KINDS.has(entry.controlKind)) return 'unsupported';
       if (entry?.controlKind) return entry.controlKind;
       if (entry?.pickerType) return 'date';
-      if (el instanceof HTMLInputElement) return 'text';
+      if (isInput(el)) return 'text';
       return el?.isContentEditable ? 'contenteditable' : 'unsupported';
     }
     function stop(ctx, writing = false) {
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
-      if (ctx.nodes.some(el => el instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(el.type))) return 'unsupported_control';
+      if (ctx.nodes.some(el => isInput(el) && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(el.type))) return 'unsupported_control';
       if (ctx.kind === 'checkbox' && ctx.el.type !== 'checkbox') return 'unsupported_control';
-      if (ctx.kind === 'radio' && ctx.nodes.some(el => ctx.customRadio ? el instanceof HTMLInputElement : el.type !== 'radio')) return 'unsupported_control';
+      if (ctx.kind === 'radio' && ctx.nodes.some(el => ctx.customRadio ? isInput(el) : el.type !== 'radio')) return 'unsupported_control';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
@@ -349,9 +365,9 @@
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
       // #269 自制单选组：选项是 div（北森 phoenix-radio），没有 input。
-      ctx.customRadio = ctx.kind === 'radio' && nodes.length > 0 && nodes.every(node => !(node instanceof HTMLInputElement));
+      ctx.customRadio = ctx.kind === 'radio' && nodes.length > 0 && nodes.every(node => !isInput(node));
       if (ctx.customRadio && !scope.ResumeProCustomControls) return result(false, 'unsupported_control', ctx);
-      ctx.startedEditable = ctx.el instanceof HTMLInputElement && !ctx.el.readOnly;
+      ctx.startedEditable = isInput(ctx.el) && !ctx.el.readOnly;
       const custom = ['custom-select', 'cascader'].includes(ctx.kind);
       if (!KINDS.has(ctx.kind) || (custom && !scope.ResumeProCustomControls)) return result(false, 'unsupported_control', ctx);
       if (custom) ctx.nodes = Array.from(new Set([...nodes, scope.ResumeProCustomControls.describe(ctx.entry).root].filter(Boolean)));
@@ -689,8 +705,8 @@
       // This path only reads the final DOM and never invokes write/stop callbacks.
       try {
         if (saved.ctx.nodes.some(node => node.isConnected === false)) return result(false, 'element_disconnected', saved.ctx);
-        if (saved.ctx.nodes.some(node => node instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(node.type))) return result(false, 'element_disconnected', saved.ctx);
-        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => saved.ctx.customRadio ? node instanceof HTMLInputElement : node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.nodes.some(node => isInput(node) && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(node.type))) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => saved.ctx.customRadio ? isInput(node) : node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
         if (saved.ctx.kind === 'checkbox' && saved.ctx.el.type !== 'checkbox') return result(false, 'element_disconnected', saved.ctx);
         if (kindOf(saved.ctx.entry, saved.ctx.el) !== saved.ctx.kind) return result(false, 'element_disconnected', saved.ctx);
         if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx, typeof saved.previous === 'string' ? { after: leftover(saved.ctx.el, saved.previous) } : {});
