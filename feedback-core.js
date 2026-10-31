@@ -56,7 +56,7 @@
   const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
     "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
     "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
-    "secret_only", "no_resume_fields"];
+    "secret_only", "no_resume_fields", "scan_exception"];
   // A failure of the AI service or the desktop link, not of matching this page.
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
@@ -64,9 +64,10 @@
   // the user is shown the fix at once, so they are not a failed request and never reported on their own.
   const SETUP_CODES = new Set(["not_installed", "not_paired", "never_paired", "not_configured"]);
   // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
+  // `scan_error` (#408): controls whose title or section could not be read, skipped one by one.
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
-    "site_search", "outside_form", "no_label", "out_of_scope", "secret",
-    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
+    "site_search", "outside_form", "no_label", "scan_error", "out_of_scope", "secret",
+    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "changed_while_waiting", "not_written", "unconfirmed", "unsynced"];
   // Where each scanned field's title came from, and why a field was not offered for 我的信息 (#228).
   const LABEL_SOURCES = ["explicit", "item", "table", "sibling", "placeholder"];
   const OFFER_SKIPS = ["ambiguous", "entry"];
@@ -82,7 +83,7 @@
     + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
     + "static html htm shtml php jsp aspx asp do action").split(" "));
   // `generic`: custom selects the fill handled on its generic path (北森), which carry no library class.
-  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "generic", "other"];
+  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "yui", "ui5", "generic", "other"];
   // How a fill was started (#301): the side panel's 一键填写, 深度分析本页, a 本站配方 run, AI 辅助新增条目.
   const ENTRIES = ["panel", "deep", "recipe", "assist", "other"];
   // What an unfilled select's popup showed: a list (by role) and whether it had any option, a calendar, or nothing opened at all.
@@ -96,7 +97,13 @@
     "in_flight", "internal", "other"];
   // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
   const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "format_mismatch", "operation_failed", "cancelled"];
+  // A text the page did not keep (#399 #405): what the box held after it lost focus (empty, what it held before
+  // the fill, or something else; never the text itself), and whether a suggestion list or another popup came
+  // up within a second of writing. The box's inputmode is part of its structure.
+  const AFTER = ["empty", "previous", "other"];
+  const OVERLAYS = ["list", "other", "none"];
+  const INPUT_MODES = ["numeric", "decimal", "tel", "email", "url", "search", "text", "none"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
@@ -125,7 +132,8 @@
   const JOB_KEYS = /^job_/;
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
-    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui|jiandaoyun|yui|ui5)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|inputmode=(?:${INPUT_MODES.join("|")})|after=(?:${AFTER.join("|")})|overlay=(?:${OVERLAYS.join("|")})`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
   // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
@@ -228,8 +236,11 @@
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
       popup_internal: n(s?.popup), grouped: n(s?.grouped), page_chrome: n(s?.pageChrome), site_search: n(s?.siteSearch),
-      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
+      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), scan_error: n(s?.scanError), out_of_scope: n(s?.outOfScope),
+      secret, no_resume_mapping: noMapping,
       ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
+      // Matches left alone because the user or the page changed the field while the AI worked (#402).
+      changed_while_waiting: n(input.keptCount),
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
     if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
@@ -241,7 +252,7 @@
   function labelSources(stats) {
     const sources = stats?.sources || {};
     const n = key => positive(sources[key]);
-    const counts = { explicit: n("explicit"), item: n("item") + n("item-text"), table: n("table") + n("table-header"),
+    const counts = { explicit: n("explicit"), item: n("item") + n("item-text") + n("item-part"), table: n("table") + n("table-header"),
       sibling: n("sibling"), placeholder: n("placeholder") };
     return LABEL_SOURCES.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
@@ -351,11 +362,14 @@
         if (c.readOnly) tokens.push("readonly");
         if (c.picker) tokens.push(`picker=${c.picker}`);
         if (c.library) tokens.push(`lib=${c.library}`);
+        if (INPUT_MODES.includes(c.inputMode)) tokens.push(`inputmode=${c.inputMode}`);
         // The select's popup (#301): never opened, or opened, and whether its list had any option. Never how
         // many: a lower select's list is the one the page loaded for the upper choice made from the resume.
         const o = item?.observed || {};
         if (OPENED.includes(o.opened)) tokens.push(`opened=${o.opened}`);
         if (LISTS.includes(o.opened) && typeof o.hasOptions === "boolean") tokens.push(`options=${o.hasOptions ? "1+" : "0"}`);
+        if (AFTER.includes(o.after)) tokens.push(`after=${o.after}`);
+        if (OVERLAYS.includes(o.overlay)) tokens.push(`overlay=${o.overlay}`);
         if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
         lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
       }
@@ -375,7 +389,7 @@
         continue;
       }
       // Every value has its own closed pattern; the length cap only bounds the regex work.
-      // The longest reachable value is drop_reasons with every reason at six digits (348 chars).
+      // The longest reachable value is drop_reasons with every reason at six digits (377 chars).
       const entry = /^([a-z_]{1,32}): (.{1,400})$/.exec(line);
       if (entry) {
         const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2])

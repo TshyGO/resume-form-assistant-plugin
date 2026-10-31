@@ -136,6 +136,7 @@
     fieldsManage: document.getElementById("fields-manage"),
     fillProgress: document.getElementById("fill-progress"),
     fillProgressPhase: document.getElementById("fill-progress-phase"),
+    fillProgressHint: document.getElementById("fill-progress-hint"),
     fillReason: document.getElementById("fill-reason"),
     targetState: document.getElementById("target-state"),
     desktopPill: document.getElementById("desktop-pill"),
@@ -585,6 +586,12 @@
     // While the page fills, the card says so with the page's own phase text; no made-up percentage.
     elements.fillProgress.hidden = !filling;
     elements.fillProgressPhase.textContent = filling ? (status.phase || "正在填写…") : "";
+    // 等 AI 久了，网页给的提示（#402）：已经先填了几项、可以取消。
+    const waitHint = filling && typeof status.waitHint === "string" ? status.waitHint : "";
+    if (elements.fillProgressHint) {
+      elements.fillProgressHint.hidden = !waitHint;
+      elements.fillProgressHint.textContent = waitHint;
+    }
     elements.fillButton.hidden = filling;
     elements.repeatButton.hidden = filling;
     // A disabled button says why, in the card, not only in a tooltip.

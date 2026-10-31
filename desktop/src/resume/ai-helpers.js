@@ -105,6 +105,9 @@
     normalizeText,
     inferFieldSemantic,
     buildRuleBasedMatches,
+    isSecretFormField,
+    isSafeResumeField,
+    localRuleMatches,
     selectResumeCandidates,
     findSelectOptionIndex,
     isPlaceholderOption,
@@ -215,6 +218,24 @@
     });
 
     return matches;
+  }
+
+  // 像密码的网页字段和简历资料不参与匹配，也不发给 AI。profile 是 profile-fields.js（ResumeProProfile）。
+  function isSecretFormField(field, profile) {
+    return String(field?.inputType ?? "").toLowerCase() === "password"
+      || profile.SECRET_LABEL.test([field?.label, field?.name, field?.key].filter(Boolean).join(" "));
+  }
+
+  function isSafeResumeField(field, profile) {
+    return !profile.SECRET_LABEL.test(String(field?.key ?? ""))
+      && !profile.SECRET_VALUE.test(String(field?.value ?? ""));
+  }
+
+  // 本地规则的匹配结果（#402）：worker 的 ruleMatches 和网页先填的字段用同一份口径。
+  function localRuleMatches(formFields, resumeFields, profile) {
+    const forms = formFields.filter((field) => !isSecretFormField(field, profile));
+    const resume = resumeFields.filter((field) => isSafeResumeField(field, profile));
+    return filterValidMatches(forms, buildRuleBasedMatches(forms, resume));
   }
 
   function filterValidMatches(formFields, matches) {

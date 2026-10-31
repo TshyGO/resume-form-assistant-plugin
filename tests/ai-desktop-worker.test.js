@@ -203,6 +203,47 @@ test('a timeout says which tier, which host and how long it waited', async () =>
   assert.equal(early.warning, '日常模型等了 96 秒没有返回，可在桌面设置换模型后重试。');
 });
 
+// #402：日常档超时按桌面记下的阶段（#299）说不同的话；旧桌面不给阶段，仍是原来那句。强档不变。
+test('a daily-tier timeout says where the request stopped', async () => {
+  const cases = [
+    ['connect', '日常模型等了 120 秒还没连上服务商（api.example.com），请检查网络或代理。'],
+    ['first_byte', '日常模型等了 120 秒没有回复，服务商可能太忙或模型太慢，可以稍后重试，或在桌面设置换模型。'],
+    ['body', '日常模型的服务商已经响应，但等了 120 秒还没收到完整结果，可能是模型太慢或网络慢，可以稍后重试，或在桌面设置换模型。'],
+    ['dns', '日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。'],
+    [undefined, '日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。']
+  ];
+  for (const [timeoutStage, warning] of cases) {
+    let clock = 0;
+    const env = worker(() => { clock += 120_000; return { ok: false, reason: 'timeout', host: 'api.example.com', timeoutStage }; }, { now: () => clock });
+    const result = await env.run({ ...BASE, formFields: [BASE.formFields[1]] });
+    assert.equal(result.warning, warning, String(timeoutStage));
+  }
+  let clock = 0;
+  const strong = worker(() => { clock += 200_000; return { ok: false, reason: 'timeout', tier: 'strong', host: 'api.example.com', timeoutStage: 'body' }; },
+    { now: () => clock });
+  const result = await strong.run({ ...BASE, formFields: [BASE.formFields[1]], tier: 'strong' });
+  assert.match(result.warning, /^强模型（api\.example\.com）等了 200 秒没有完成字段匹配。/);
+});
+
+// #402：网页先填用的本地匹配和 worker 的 ruleMatches 是同一份口径：像密码的字段和资料都不参与。
+test('the local matches a page fills first are the worker\'s rule matches', async () => {
+  const profile = require('../profile-fields.js');
+  const input = {
+    formFields: [{ fieldId: 'name', label: '姓名' }, { fieldId: 'pwd', label: '登录密码', inputType: 'password' },
+      { fieldId: 'mail', label: '邮箱', inputType: 'email' }, { fieldId: 'school', label: '学校' }, { fieldId: 'phone', label: '手机号码' }],
+    resumeFields: [{ group: '基本信息', key: '姓名', value: '测试用户' }, { group: '基本信息', key: '邮箱', value: 'tester@example.com' },
+      { group: '基本信息', key: '手机号码', value: 'token: abc123' }, { group: '教育背景', key: '学校', value: '大学乙' }]
+  };
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  const result = await env.run(input);
+  const local = helpers.localRuleMatches(input.formFields, input.resumeFields, profile);
+  assert.deepEqual(local, [{ fieldId: 'name', value: '测试用户' }, { fieldId: 'mail', value: 'tester@example.com' }]);
+  assert.equal(result.diagnostics.ruleMatches, local.length);
+  const fromWorker = JSON.parse(JSON.stringify(result.matches));
+  assert.deepEqual(fromWorker.filter(match => local.some(item => item.fieldId === match.fieldId)), local);
+  assert.equal(result.diagnostics.secretFormFields, 1);
+});
+
 // #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
 test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
   const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));

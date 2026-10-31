@@ -57,6 +57,20 @@ test('fill descriptors normalize legacy scanner names to the closed control kind
   assert.deepEqual(Array.from(sent.formFields, field => field.controlKind), ['native-select', 'date']);
 });
 
+test('a Jiandaoyun date box is described as a date, not a time: its class names always say datetime', async () => {
+  // #301 简道云日期框的类名是 x-datetime datetime-trigger-input，说明不了格式；按「时间」发给 AI 会填成 HH:mm。
+  const late = lateScanner(); let sent;
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async message => { sent = message; return { success: true, matches: [] }; } });
+  const date = new ctx.HTMLInputElement(), root = new ctx.HTMLElement();
+  root.className = 'x-datetime datetime-trigger-input has-clear';
+  root.matches = selector => selector === '.fx-form-datetime .x-datetime';
+  late.holder.current = scanWith([control(date, { controlKind: 'date-picker', pickerType: 'jiandaoyun', root, label: '出生年月' })]);
+  ctx.helpers.setCurrentStore(store); ctx.helpers.setShadowRoot(shadow().root);
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.deepEqual(Array.from(sent.formFields, field => [field.controlKind, field.pickerType, field.pickerInputType]), [['date', 'jiandaoyun', 'date']]);
+});
+
 test('a failed parent blocks later fields in its cascade group', async () => {
   const late = lateScanner();
   const aiHelpers = { ...require('../ai-helpers.js'), detectCascadeGroups(fields) {

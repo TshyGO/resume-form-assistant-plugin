@@ -242,7 +242,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     stats: { domInputs: big, visible: big, typeHidden: big, nonFillable: big, disabled: big, invisible: big, grouped: big, outOfScope: big,
       popup: big, pageChrome: big, siteSearch: big, outsideForm: big, noLabel: big,
       sources: { explicit: big, item: big, table: big, sibling: big, placeholder: big }, offerSkipped: { ambiguous: big, entry: big } },
-    fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, requested: true,
+    fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, keptCount: big, requested: true,
     diagnostics: { ruleMatches: 1, aiFields: big, aiMatches: 1, promptBytes: 10, apiMs: 1, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
     probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
       ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } },
@@ -250,7 +250,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     unfilledControls: [{ label: "参加工作时间", reasonCode: "framework_state_unsynced", observed: { opened: "component", hasOptions: true },
       control: { tag: "input", type: "checkbox", role: "checkbox", popup: "listbox", readOnly: true, picker: "element", library: "element" } }] });
   const drops = /^drop_reasons: (.*)$/m.exec(report);
-  assert.ok(drops && drops[1].split(",").length === 17, report);
+  assert.ok(drops && drops[1].split(",").length === 18, report);
   assert.match(report, /^label_sources: (?:[a-z]+=999999,){4}placeholder=999999$/m);
   assert.match(report, /^offer_skipped: ambiguous=999999,entry=999999$/m);
   assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}generic=999999,other=999999$/m);
