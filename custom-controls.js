@@ -233,15 +233,29 @@
   const FLOATING = '.el-popper, .el-picker-panel, .el-autocomplete-suggestion, .ant-calendar-picker-container, .ant-cascader-menus, .ant-picker-dropdown';
   const FLOATING_WORDS = ['popper', 'popover', 'popup', 'dropdown', 'picker-panel', 'suggest', 'calendar', 'datepicker', 'date-picker']
     .map(word => `[class*="${word}" i]`).join(', ');
+  // 每块浮层在记下时有哪些直接子节点（见 staleLayer）。
+  const layerKids = new WeakMap();
   function shownLayers(doc, visible) {
     const View = doc.defaultView;
     const floating = node => ['absolute', 'fixed'].includes(View?.getComputedStyle(node).position);
-    return new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(FLOATING)).filter(visible),
+    const layers = new Set([...popups(doc, visible), ...Array.from(doc.querySelectorAll(FLOATING)).filter(visible),
       ...Array.from(doc.querySelectorAll(FLOATING_WORDS)).filter(node => trim(node.textContent) && visible(node) && floating(node))]);
+    for (const layer of layers) layerKids.set(layer, new Set(layer.children));
+    return layers;
   }
   // 被点开前就开着的浮层装着、或装着它的一块不是这次点开的。装着这个控件的不算：页面上常驻的大块 listbox、tree。
+  // 旧浮层装着它时，只有它所在的那一支点开前就在这块里，才算旧的：网页放弹层的常驻外壳里装着上一题留下的下拉，
+  // 这次新放进同一个外壳的日历、下拉不算。
   function staleLayer(node, info) {
-    return Array.from(info.before || []).some(old => old.isConnected && !old.contains(info.root) && (old.contains(node) || node.contains(old)));
+    return Array.from(info.before || []).some(old => {
+      if (!old.isConnected || old.contains(info.root)) return false;
+      if (node === old || node.contains(old)) return true;
+      if (!old.contains(node)) return false;
+      let branch = node;
+      while (branch.parentElement && branch.parentElement !== old) branch = branch.parentElement;
+      const kids = layerKids.get(old);
+      return !kids || kids.has(branch);
+    });
   }
   function ownedPopup(info, visible) {
     const sources = [info.combo, info.el, info.root, ...info.root.querySelectorAll('[aria-controls], [aria-owns]')];

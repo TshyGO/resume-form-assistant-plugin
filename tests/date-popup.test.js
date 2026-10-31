@@ -138,6 +138,20 @@ test("ant-design-vue 1.x with an unreadable header and the same day already chos
   assert.equal(h.field.value, "2002-05-12");
 });
 
+// 外壳里已经装着上一题留下的下拉（有字），这次的日历也画进同一个外壳：旧下拉那一支算旧的，新画进来的日历是自己的。
+test("a calendar drawn into a floating container that still holds the last field's dropdown is still the field's own", async () => {
+  const h = antCalendar({ lag: 0 });
+  const host = h.doc.createElement("div");
+  host.className = "app-popup-container";
+  host.style.position = "absolute";
+  h.doc.body.append(host);
+  host.append(leavingDropdown(h.doc));
+  h.doc.body.append = (node) => host.append(node);
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+});
+
 test("antd 3 (React) takes the typed date at once and is not slowed down", async () => {
   const h = antCalendar({ lag: null });
   const result = await h.api.operate(h.target, "2002-05-12");
