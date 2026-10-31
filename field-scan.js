@@ -54,6 +54,24 @@
     return String(el?.getAttribute?.("class") || "").split(/\s+/).filter(Boolean);
   }
 
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：选择器里的 .ant- 按节点所在文档的前缀展开；
+  // 按类名比对时，换了前缀的类名再补一份 ant- 的写法，原来的类名照样比（app-header 这类网站自己的类名不受前缀影响）。
+  function antdCss(node, selector) {
+    return globalScope.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  }
+
+  // 扫描开始时按页面现在的样子重看前缀：表单常在一键填写点下去之后才出来。
+  function antdRefresh(node) {
+    globalScope.ResumeProAntdPrefix?.prefixes(node, { fresh: true });
+  }
+
+  function antdTokens(node, tokens) {
+    const antd = globalScope.ResumeProAntdPrefix;
+    if (!antd) return tokens;
+    const renamed = tokens.map((token) => antd.token(node, token)).filter((token, index) => token !== tokens[index]);
+    return renamed.length ? [...tokens, ...renamed] : tokens;
+  }
+
   function attr(el, name) {
     return String(el?.getAttribute?.(name) || "");
   }
@@ -175,7 +193,7 @@
     for (let depth = 0; container && depth < 3; depth += 1) container = container.parentElement;
     if (!container) return false;
     return Array.from(container.querySelectorAll("input")).some((other) => {
-      if (other === el || !ctx.isVisible(other) || !other.closest(DATE_PICKER_SELECTOR)) return false;
+      if (other === el || !ctx.isVisible(other) || !other.closest(antdCss(other, DATE_PICKER_SELECTOR))) return false;
       const o = other.getBoundingClientRect();
       return Math.abs(o.left - r.left) <= 4 && Math.abs(o.top - r.top) <= 4 && Math.abs(o.width - r.width) <= 6 && Math.abs(o.height - r.height) <= 6;
     });
@@ -236,7 +254,7 @@
     if (pageEdge && !pageEdge.parentElement?.closest(CONTENT_SCOPE_SELECTOR)) return true;
     for (let node = el.parentElement; node && node.tagName !== "BODY"; node = node.parentElement) {
       // #408 id 要读属性：表单里有 name 或 id 叫 id 的控件时，form.id 是那个控件（antd 把字段名写进 id）。
-      const tokens = [...classTokens(node), attr(node, "id")].map((token) => token.toLowerCase());
+      const tokens = [...antdTokens(node, classTokens(node)), attr(node, "id")].map((token) => token.toLowerCase());
       if (tokens.some((token) => CHROME_TOKENS.has(token)) && !node.querySelector("form, [role='form']")) return true;
     }
     return false;
@@ -284,7 +302,7 @@
     let best = null;
     let node = el.parentElement;
     for (let depth = 0; node && node !== ctx.body && depth < 5; depth += 1, node = node.parentElement) {
-      if (!node.matches(DATE_PICKER_SELECTOR)) continue;
+      if (!node.matches(antdCss(node, DATE_PICKER_SELECTOR))) continue;
       if (!componentScopeOk(node, ctx, 2)) break;
       best = node;
     }
@@ -292,7 +310,8 @@
   }
 
   function pickerTypeOf(root) {
-    if (root.closest(".ant-picker") || root.matches(".ant-picker") || root.querySelector?.(".ant-picker")) return "antd";
+    const antd = antdCss(root, ".ant-picker");
+    if (root.closest(antd) || root.matches(antd) || root.querySelector?.(antd)) return "antd";
     if (root.closest(".el-date-editor") || root.matches(".el-date-editor")) return "element";
     if (root.matches(".fx-form-datetime .x-datetime")) return "jiandaoyun";
     return "generic";
@@ -310,7 +329,7 @@
       const ariaMatch = hasComboSignal(node);
       if (!tokenMatch && !ariaMatch) continue;
       if (!componentScopeOk(node, ctx, 3)) break;
-      const library = tokens.some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
+      const library = antdTokens(node, tokens).some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
       if (library || ariaMatch) return node;
       if (best && Array.from(node.querySelectorAll('[role="combobox"]')).some(other => !best.contains(other))) break;
       // #301 Moka 整行（apply-field 带 select_info-*、Select-* 类名）也像下拉，可它装着题目：根不能把题目包进去。
@@ -353,7 +372,9 @@
       if (type === "radio") {
         const scope = el.form || el.closest("[role='radiogroup'], fieldset") || null;
         const key = el.name ? `name:${el.name}` : null;
-        const groupKey = key || el.closest("[role='radiogroup'], fieldset") || el;
+        // #301 #418 antd 的 Radio.Group 不传 name 时，input 没有 name，组上也没有 role（ant-design-vue 1.x、antd 3～5 都是）：按组容器分。
+        // 换了前缀的 antd（atsx-radio-group）也算。
+        const groupKey = key || el.closest(antdCss(el, "[role='radiogroup'], fieldset, .ant-radio-group")) || el;
         if (!radiosByName.has(groupKey)) radiosByName.set(groupKey, []);
         radiosByName.get(groupKey).push({ el, scope });
         continue;
@@ -390,7 +411,8 @@
     }
 
     customByRoot.forEach((inputs, root) => {
-      const cascade = root.matches(".ant-cascader, .el-cascader, .arco-cascader") || Boolean(root.querySelector(".ant-cascader, .el-cascader, .arco-cascader"))
+      const cascader = antdCss(root, ".ant-cascader, .el-cascader, .arco-cascader");
+      const cascade = root.matches(cascader) || Boolean(root.querySelector(cascader))
         || root.getAttribute('aria-haspopup') === 'tree' || primaryInput(inputs).getAttribute('aria-haspopup') === 'tree';
       controls.push({ kind: "element", controlKind: cascade ? "cascader" : "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
     });
@@ -957,6 +979,7 @@
   // --- 对外入口 ---------------------------------------------------------------
 
   function scanPage(doc, options = {}) {
+    antdRefresh(doc);
     const ctx = makeContext(doc, options);
     const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, scanError: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
@@ -1201,6 +1224,7 @@
   // 对不上题目、在页头或像站内搜索的也列出来，由大纲自己决定写不写。只读结构，不读值。
   // root 是 Document 或开放的 ShadowRoot。
   function outlineControls(root, options = {}) {
+    antdRefresh(root);
     const ctx = makeContext(root, options);
     const itemByRoot = new Map();
     // #408 和 scanPage 一样：哪一项读不出来就不列这一项，大纲照常生成。

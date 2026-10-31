@@ -26,6 +26,10 @@
     return typeof Own === 'function' && Own !== Local && node instanceof Own;
   }
   const isInput = node => isA(node, 'HTMLInputElement');
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：选择器里的 .ant- 按节点所在文档的前缀展开，
+  // 查类名时换了前缀的也算。
+  const antd = (node, selector) => scope.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  const antdHas = (el, name) => scope.ResumeProAntdPrefix?.has(el, name) ?? Boolean(el?.classList?.contains(name));
 
   function create(deps = {}) {
     const helpers = deps.helpers || scope.ResumeProAIHelpers;
@@ -35,7 +39,7 @@
     const checks = new WeakMap();
     const timeoutMs = deps.timeoutMs ?? 2000;
     const visible = el => {
-      if (!el || el.isConnected === false || el.hidden || el.classList?.contains('ant-picker-dropdown-hidden')) return false;
+      if (!el || el.isConnected === false || el.hidden || antdHas(el, 'ant-picker-dropdown-hidden')) return false;
       if (deps.isVisible ? deps.isVisible(el) : !el.getBoundingClientRect || el.getBoundingClientRect().height > 0) return true;
       // Liepin's opening motion starts at scale(0): the rendered rect is empty,
       // while the mounted calendar already has layout and can commit selection.
@@ -72,7 +76,7 @@
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
         if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
-        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled')) return 'control_disabled';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches(antd(root, '.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled'))) return 'control_disabled';
       }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
@@ -115,7 +119,7 @@
     function click(el, ctx, committing = false) {
       const reason = stop(ctx, true);
       if (reason) return reason;
-      const disabled = () => el.disabled || Boolean(el.closest?.('[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled'));
+      const disabled = () => el.disabled || Boolean(el.closest?.(antd(el, '[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled')));
       if (disabled()) return 'control_disabled';
       // ARIA/component markup does not authorize form submission or reset.
       const submits = () => ['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)
@@ -233,6 +237,9 @@
       let expected = deps.normalizeText(ctx.el, typed);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
+      // #301 #417 只读的框：聚焦之前记下看得见的对话框、浮层，写不上时收起聚焦后网页打开的那一块（见末尾）。
+      const readonly = !shown && ctx.el.readOnly === true;
+      const layersBefore = readonly ? scope.ResumeProCustomControls?.openLayers?.(ctx.el.ownerDocument, visible) || null : null;
       if (!shown && !await deps.runTextLifecycle(ctx.el, typed, false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
       ctx.acceptedOnce = shows(ctx.el, expected);
       await deps.waitTextCommit();
@@ -315,6 +322,13 @@
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
+      // #301 #417 只读的框写不上：多半是网页自己的选择框（智联的城市、学校、专业，点开是对话框、el-popover 或自制浮层），要在网页里选。
+      // 照样先写过了（v-model 绑定的只读框、读输入框值的组件写得上）；写不上的单独报，聚焦时网页打开的收起来。
+      if (readonly && !verdict.ok && rejected(verdict.reason)) {
+        // 收起之前让宿主记下冒出过弹层（诊断的 overlay=），收起以后它就看不到了。
+        if (layersBefore) { ctx.options.beforeDismiss?.(); await scope.ResumeProCustomControls.dismissOpened?.(ctx, layersBefore, host); }
+        return result(false, 'readonly_picker', ctx, after ? { after } : {});
+      }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
       if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, previous,
         accepted: () => shows(ctx.el, expected),
@@ -364,6 +378,8 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
+      // #301 换了前缀的 antd：操作开始时按页面现在的样子重看前缀，见 antd-prefix.js。
+      scope.ResumeProAntdPrefix?.prefixes(ctx.el, { fresh: true });
       // #269 自制单选组：选项是 div（北森 phoenix-radio），没有 input。
       ctx.customRadio = ctx.kind === 'radio' && nodes.length > 0 && nodes.every(node => !isInput(node));
       if (ctx.customRadio && !scope.ResumeProCustomControls) return result(false, 'unsupported_control', ctx);
@@ -388,10 +404,12 @@
         const direct = ['week', 'range', 'color'].includes(ctx.el.type);
         if (ctx.kind === 'date' && ctx.entry.pickerType === 'antd' && ctx.el.ownerDocument) {
           const doc = ctx.el.ownerDocument;
-          ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible));
+          ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible));
           ctx.alreadyOpen = doc.activeElement === ctx.el && ctx.popupsBefore.size === 1;
         }
-        if (custom) ctx.popupsBeforeFocus = scope.ResumeProCustomControls.visiblePopups?.(ctx.entry, visible) || null;
+        // 聚焦之前记下看得见的弹层（见 custom-controls.js 的 shownLayers）：有的下拉、日历一聚焦就展开，聚焦后再记就把它算成了原有的。
+        // 只读日期框也走 custom-controls 的日历路径（#301 智联 Element 日期一聚焦就打开）。
+        if (custom || (ctx.kind === 'date' && ctx.el?.readOnly)) ctx.popupsBeforeFocus = scope.ResumeProCustomControls?.visiblePopups?.(ctx.entry, visible) || null;
         if (!direct) focus(ctx.el);
         await delay(0);
         const afterFocus = stop(ctx, true);
@@ -445,6 +463,7 @@
           accepted = () => ctx.el.selectedIndex === index && ctx.el.options[index]?.value === chosenValue && ctx.el.options[index]?.text === chosenText;
         } else if (ctx.kind === 'date') {
           const date = await operateDate(ctx, desiredValue);
+          if (date.typeText) return await text(ctx, desiredValue);
           if (date.reason) return result(false, date.reason, ctx, date.observed);
           if (date.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
           accepted = date.accepted || (() => {
@@ -477,7 +496,11 @@
       }
     }
 
+    // 题目和占位提示：一段起止取哪一头看它们（见 ai-helpers.js 的 rangeDateValue）。
+    const dateHint = ctx => [ctx.entry?.binding?.label, ctx.el?.getAttribute?.('placeholder'), ctx.el?.getAttribute?.('aria-label')].filter(Boolean).join(' ');
     async function operateDate(ctx, raw) {
+      // #301 日期题收到一段起止（「2019.09-2023.06」）：题目写明开始还是结束时取那一头，各种日期控件都一样。
+      raw = helpers?.rangeDateValue?.(raw, dateHint(ctx)) ?? raw;
       if (['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type)) {
         const expected = helpers?.normalizeDateValue?.(raw, ctx.el.type) ?? String(raw ?? '');
         if (!expected) return { reason: 'invalid_date' };
@@ -509,18 +532,25 @@
     async function antDate(ctx, raw) {
       const doc = ctx.el.ownerDocument;
       if (!doc?.querySelectorAll) return { reason: 'unsupported_control' };
-      const before = ctx.popupsBefore || new Set(Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible));
+      const before = ctx.popupsBefore || new Set(Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible));
       const reason = click(ctx.el, ctx); if (reason) return { reason };
       const opened = await waitUntil(ctx, doc.documentElement, () => {
-        const all = Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible);
+        const all = Array.from(doc.querySelectorAll(antd(doc, '.ant-picker-dropdown'))).filter(visible);
         const added = all.filter(node => !before.has(node));
         return added.length === 1 ? added[0] : ctx.alreadyOpen && all.length === 1 ? all[0] : null;
       }, popup => Boolean(popup));
       if (opened.reason) return { reason: opened.reason };
       const popup = opened.value;
       ctx.observed = { library: 'antd', popupRole: 'calendar' };
+      // 带时间的面板（TimePicker、showTime 的日期框）这里只会点年、月、日：收起日历，框能打字就按文本框打字，
+      // 和没认出 antd 时一样（#301 换了前缀的 antd 5 这样能填上；antd 4 失焦时不收打的字，照样报没写上）；框只读的报控件暂不支持。
+      // 带时间的区间日期（RangePicker showTime）不打字：一次只写得进开始或结束一个框，填不成一个区间，
+      // 和不带时间的区间日期一样报控件暂不支持。
+      const timed = Boolean(popup.querySelector(antd(popup, '.ant-picker-time-panel')));
+      const range = Boolean(ctx.el.closest?.(antd(ctx.el, '.ant-picker-range')));
       // 页面异常也按失败收尾；只把固定的原因码交出去。
-      const picked = await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
+      const picked = timed ? { reason: 'unsupported_control', typeText: !range }
+        : await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
       // 选不成时收起自己点开的日历，免得挡住后面的字段：让输入框失焦（见 leavePicker），组件里的值不变。
       // 不按键、不点页面别处；原本就开着的、用户停下或改了内容的不动。
       // 刚在日历里按下过鼠标时，rc-picker 到下一帧才认失焦，这一次它不收：0.1 秒内没开始收起就再失焦一次。
@@ -532,52 +562,55 @@
         if (leaving.reason === 'verification_timeout' && !stop(ctx)) leavePicker(ctx.el);
         await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
       }
+      // 用户停下、改了内容的，或框是只读的，不打字。
+      if (picked.typeText && (stop(ctx) || ctx.el.readOnly)) return { reason: stop(ctx) || picked.reason };
       return picked;
     }
     async function antDatePick(ctx, raw, popup) {
-      if (popup.querySelectorAll('.ant-picker-panel').length !== 1) return { reason: 'unsupported_control' };
-      const mode = popup.querySelector('.ant-picker-month-panel') ? 'month' : popup.querySelector('.ant-picker-year-panel') ? 'year' : 'date';
+      const find = (node, selector) => node.querySelector(antd(node, selector));
+      if (popup.querySelectorAll(antd(popup, '.ant-picker-panel')).length !== 1) return { reason: 'unsupported_control' };
+      const mode = find(popup, '.ant-picker-month-panel') ? 'month' : find(popup, '.ant-picker-year-panel') ? 'year' : 'date';
       const expected = mode === 'year' ? String(raw).match(/^\s*(\d{4})(?:年|\b)/)?.[1] : helpers?.normalizeDateValue?.(raw, mode);
       if (!expected || !(mode === 'year' ? /^\d{4}$/ : mode === 'month' ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/).test(expected)) return { reason: 'invalid_date' };
       const year = Number(expected.slice(0, 4));
       if (year < 1900 || year > 2100) return { reason: 'invalid_date' };
       const take = async (node, committing = false) => {
-        if (!node || node.disabled || node.closest?.('.ant-picker-cell-disabled')) return 'no_option_match';
-        return click(node.querySelector?.('.ant-picker-cell-inner') || node, ctx, committing);
+        if (!node || node.disabled || node.closest?.(antd(node, '.ant-picker-cell-disabled'))) return 'no_option_match';
+        return click(node.querySelector?.(antd(node, '.ant-picker-cell-inner')) || node, ctx, committing);
       };
       if (mode !== 'year') {
-        const why = await take(popup.querySelector('.ant-picker-year-btn')); if (why) return { reason: why };
-        const panel = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-year-panel'), Boolean);
+        const why = await take(find(popup, '.ant-picker-year-btn')); if (why) return { reason: why };
+        const panel = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-year-panel'), Boolean);
         if (panel.reason) return { reason: panel.reason };
       }
       let selected = false;
       const started = now();
       for (let step = 0; step < 24 && now() - started < timeoutMs; step++) {
-        const panel = popup.querySelector('.ant-picker-year-panel');
+        const panel = find(popup, '.ant-picker-year-panel');
         if (!panel) return { reason: 'selection_not_committed' };
         const cell = panel.querySelector(`td[title="${year}"]`);
         if (cell) { const why = await take(cell, mode === 'year'); if (why) return { reason: why }; selected = true; break; }
         const years = Array.from(panel.querySelectorAll('td[title]')).map(node => Number(node.title)).filter(Number.isFinite);
         if (!years.length) return { reason: 'selection_not_committed' };
         const previous = panel.textContent;
-        const why = await take(panel.querySelector(year < Math.min(...years) ? '.ant-picker-header-super-prev-btn' : '.ant-picker-header-super-next-btn'));
+        const why = await take(find(panel, year < Math.min(...years) ? '.ant-picker-header-super-prev-btn' : '.ant-picker-header-super-next-btn'));
         if (why) return { reason: why };
         const changed = await waitUntil(ctx, popup, () => panel.textContent, text => text !== previous);
         if (changed.reason) return { reason: changed.reason };
       }
       if (!selected) return { reason: 'verification_timeout' };
       if (mode === 'year') return { expected, mode };
-      const leftYear = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-year-panel'), panel => !panel);
+      const leftYear = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-year-panel'), panel => !panel);
       if (leftYear.reason) return { reason: leftYear.reason };
-      if (mode === 'date' && !popup.querySelector('.ant-picker-month-panel')) {
-        const why = await take(popup.querySelector('.ant-picker-month-btn')); if (why) return { reason: why };
-        const month = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-month-panel'), Boolean);
+      if (mode === 'date' && !find(popup, '.ant-picker-month-panel')) {
+        const why = await take(find(popup, '.ant-picker-month-btn')); if (why) return { reason: why };
+        const month = await waitUntil(ctx, popup, () => find(popup, '.ant-picker-month-panel'), Boolean);
         if (month.reason) return { reason: month.reason };
       }
-      const monthCell = popup.querySelector(`.ant-picker-month-panel td[title="${expected.slice(0, 7)}"]`);
+      const monthCell = find(popup, `.ant-picker-month-panel td[title="${expected.slice(0, 7)}"]`);
       const monthWhy = await take(monthCell, mode === 'month'); if (monthWhy) return { reason: monthWhy };
       if (mode === 'date') {
-        const day = await waitUntil(ctx, popup, () => popup.querySelector(`.ant-picker-date-panel td[title="${expected}"]`), Boolean);
+        const day = await waitUntil(ctx, popup, () => find(popup, `.ant-picker-date-panel td[title="${expected}"]`), Boolean);
         if (day.reason) return { reason: day.reason };
         const why = await take(day.value, true); if (why) return { reason: why };
       }

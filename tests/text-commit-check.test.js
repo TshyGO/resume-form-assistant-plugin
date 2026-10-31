@@ -565,6 +565,121 @@ test("pressing stop while a rejected box is being watched ends the fill at once"
   assert.equal(p.input("name").value, "李四", "nothing written after stop");
 });
 
+// ---- #417 只读框配网页自己的选择框 ----
+// 智联（Element UI 2）的城市、学校、专业一类：只读的 el-input，值单向绑定，点开是网页自己的对话框、el-popover 或浮层。
+// 照样先写（v-model 绑定的只读框写得上）；写不上的报 readonly_picker，聚焦时网页打开的对话框、浮层收起来。
+function pickerDialog(p) {
+  const wrapper = p.doc.createElement("div");
+  wrapper.className = "el-dialog__wrapper";
+  wrapper.style.display = "none";
+  wrapper.innerHTML = '<div role="dialog" aria-modal="true" class="el-dialog"><div class="el-dialog__body"><span>计算机科学与技术</span><span>软件工程</span></div></div>';
+  p.doc.body.append(wrapper);
+  const counts = { opened: 0, escapes: 0 };
+  // Element 的对话框在 window 上听 Esc，只关最上面一层。
+  p.w.addEventListener("keydown", (event) => { if (event.key === "Escape") { counts.escapes += 1; wrapper.style.display = "none"; } });
+  return { wrapper, counts, open: () => { counts.opened += 1; wrapper.style.display = ""; } };
+}
+
+test("a readonly box that opens the page's own picker says so, and the picker it opened is closed again", async (t) => {
+  const p = page(t, item("major", "专业", 'readonly placeholder="请选择专业"') + item("name", "姓名"), [["专业", "计算机科学与技术"], ["姓名", "张三"]]);
+  const dialog = pickerDialog(p);
+  p.input("major").addEventListener("focus", dialog.open);
+  // 单向绑定：组件按自己的状态重画，框里还是空的。
+  controlled(p.input("major"), { onInput: () => "" });
+  p.reports.length = 0;
+  await p.run();
+  assert.equal(p.reason("major"), "readonly_picker");
+  assert.equal(p.input("major").value, "");
+  assert.equal(p.input("name").value, "张三");
+  assert.equal(dialog.counts.opened, 1);
+  assert.equal(dialog.wrapper.style.display, "none", "聚焦时打开的对话框收起来了");
+  assert.deepEqual(p.unfilledLine(), ["- 专业: input[text] readonly after=empty overlay=other reason=readonly_picker"]);
+  assert.match(p.ui.status.textContent, /专业（网页自己的选择框）/);
+});
+
+test("a readonly box bound both ways still takes the text", async (t) => {
+  const p = page(t, item("major", "专业", "readonly"), [["专业", "计算机科学与技术"]]);
+  const dialog = pickerDialog(p);
+  await p.run();
+  assert.equal(p.input("major").value, "计算机科学与技术");
+  assert.equal(p.reason("major"), "");
+  assert.equal(dialog.counts.escapes, 0);
+});
+
+test("a readonly box that the page empties without any picker is reported the same way and nothing is pressed", async (t) => {
+  const p = page(t, item("city", "所在城市", "readonly"), [["所在城市", "上海"]]);
+  const dialog = pickerDialog(p);
+  controlled(p.input("city"), { onInput: () => "" });
+  let presses = 0;
+  p.doc.addEventListener("mousedown", () => { presses += 1; });
+  assert.equal(await p.set("city", "上海"), false);
+  assert.equal(p.reason("city"), "readonly_picker");
+  assert.deepEqual([dialog.counts.escapes, presses], [0, 0]);
+});
+
+// 页面上本来就开着另一个对话框（不装着这个框）：Esc 可能把它关掉，不按 Esc、也不在页面上按，聚焦时打开的那一块留着。
+test("a readonly box outside a dialog that was already open sends no Esc and presses nothing", async (t) => {
+  const p = page(t, item("major", "专业", "readonly"), [["专业", "计算机科学与技术"]]);
+  const other = p.doc.createElement("div");
+  other.setAttribute("role", "dialog");
+  other.className = "notice-dialog";
+  other.innerHTML = "<span>请先阅读报名须知</span>";
+  p.doc.body.append(other);
+  const dialog = pickerDialog(p);
+  p.input("major").addEventListener("focus", dialog.open);
+  controlled(p.input("major"), { onInput: () => "" });
+  let presses = 0;
+  p.doc.addEventListener("mousedown", () => { presses += 1; });
+  assert.equal(await p.set("major", "计算机科学与技术"), false);
+  assert.equal(p.reason("major"), "readonly_picker");
+  assert.deepEqual([dialog.counts.escapes, presses], [0, 0]);
+  assert.equal(other.isConnected, true);
+});
+
+test("a readonly box inside a dialog never presses Esc: a press beside it closes the layer it opened", async (t) => {
+  // 表单本身在对话框里：Esc 会把这层对话框也关掉，里面没保存的内容就没了。
+  // 浮层挂在 body 下（el-popover 一类），或者就画在框旁边、和框同在一个组件里（自制选择器），都是在组件外面按下就收。
+  for (const inline of [false, true]) {
+    const box = `<div class="city-picker"><input id="city" readonly>${inline ? '<div class="city-popup" style="display:none"><span>北京市</span><span>上海市</span></div>' : ""}</div>`;
+    const p = page(t, `<div role="dialog" class="el-dialog" id="outer"><div class="form-item"><label for="city">所在城市</label>${box}</div></div>`, [["所在城市", "上海"]]);
+    let layer = p.doc.querySelector(".city-popup");
+    if (!layer) {
+      layer = p.doc.createElement("div");
+      layer.className = "el-popover el-popper";
+      layer.style.display = "none";
+      layer.innerHTML = "<span>北京市</span><span>上海市</span>";
+      p.doc.body.append(layer);
+    }
+    const component = inline ? p.doc.querySelector(".city-picker") : layer;
+    let escapes = 0;
+    p.w.addEventListener("keydown", (event) => { if (event.key === "Escape") escapes += 1; });
+    p.doc.addEventListener("mousedown", (event) => { if (!component.contains(event.target)) layer.style.display = "none"; });
+    p.input("city").addEventListener("focus", () => { layer.style.display = ""; });
+    controlled(p.input("city"), { onInput: () => "" });
+    assert.equal(await p.set("city", "上海"), false);
+    assert.equal(p.reason("city"), "readonly_picker");
+    assert.equal(escapes, 0, `inline=${inline}`);
+    assert.equal(layer.style.display, "none", `inline=${inline}`);
+    assert.equal(p.doc.getElementById("outer").isConnected, true);
+  }
+});
+
+test("when focus brings up two layers at once, neither is touched", async (t) => {
+  const p = page(t, item("city", "所在城市", "readonly"), [["所在城市", "上海"]]);
+  const dialog = pickerDialog(p);
+  const layer = p.doc.createElement("div");
+  layer.className = "el-popover el-popper";
+  layer.style.display = "none";
+  p.doc.body.append(layer);
+  let presses = 0;
+  p.doc.addEventListener("mousedown", () => { presses += 1; });
+  p.input("city").addEventListener("focus", () => { dialog.open(); layer.style.display = ""; });
+  controlled(p.input("city"), { onInput: () => "" });
+  assert.equal(await p.set("city", "上海"), false);
+  assert.equal(p.reason("city"), "readonly_picker");
+  assert.deepEqual([dialog.counts.escapes, presses, dialog.wrapper.style.display, layer.style.display], [0, 0, "", ""]);
+});
+
 // ---- 手动写入不整理 ----
 
 test("adding then removing a date chip by hand leaves the box empty, not -01", async (t) => {

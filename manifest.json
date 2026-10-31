@@ -74,6 +74,7 @@
         "feedback-core.js",
         "ai-client.js",
         "ai-helpers.js",
+        "antd-prefix.js",
         "custom-controls.js",
         "control-adapters.js",
         "profile-fields.js",

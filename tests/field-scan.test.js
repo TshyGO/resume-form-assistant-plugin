@@ -259,6 +259,27 @@ test("radio groups take the question, not an option, and same-named groups in re
   assert.ok(radios.every((control) => scanner.isBindingCurrent(control, doc, { isVisible })), "刚扫描完的对应关系应当成立");
 });
 
+// #301 #418 南航（ant-design-vue 1.7.8）的是/否题：Radio.Group 不传 name 时每个 input 的 name 都是空的，组上也没有 role。
+// antd 3.26 / 4.24 / 5.21（React）一样。结构照 2026-10-31 在 Chromium 里跑真组件看到的写。
+test("antd radio groups without a name are one question each, titled by their form item", () => {
+  const radio = (value, text, cls = "ant-radio") => `<label class="${cls}-wrapper"><span class="${cls}"><input type="radio" class="${cls}-input" value="${value}"><span class="${cls}-inner"></span></span><span> ${text} </span></label>`;
+  const vue1 = (id, title) => `<div class="ant-row ant-form-item"><div class="ant-col ant-form-item-label"><label for="${id}" title="${title}" class="ant-form-item-required">${title}</label></div>`
+    + `<div class="ant-col ant-form-item-control-wrapper"><div class="ant-form-item-control"><span class="ant-form-item-children">`
+    + `<div class="ant-radio-group ant-radio-group-outline ant-radio-group-default" id="${id}">${radio("Y", "是")}${radio("N", "否")}</div></span><!----></div></div></div>`;
+  const antd5 = (id, title, group, cls) => `<div class="ant-form-item"><div class="ant-row ant-form-item-row"><div class="ant-col ant-form-item-label"><label for="${id}" title="${title}">${title}</label></div>`
+    + `<div class="ant-col ant-form-item-control"><div class="ant-form-item-control-input"><div class="ant-form-item-control-input-content">`
+    + `<div class="ant-radio-group ${group}" id="${id}">${radio("Y", "是", cls)}${radio("N", "否", cls)}</div></div></div></div></div></div>`;
+  const doc = load(`<form class="ant-form ant-form-vertical">${vue1("basicForm_infection", "是否患有传染性疾病")}${vue1("basicForm_colorBlindness", "是否色盲色弱")}`
+    + `${antd5("basic_party", "是否党员", "ant-radio-group-solid", "ant-radio-button")}${antd5("basic_relative", "是否有亲属在本公司", "ant-radio-group-outline", "ant-radio")}</form>`);
+  const result = scan(doc);
+  const radios = result.controls.filter((control) => control.kind === "radio");
+  assert.deepEqual(radios.map((control) => [control.label, control.elements.length]),
+    [["是否患有传染性疾病", 2], ["是否色盲色弱", 2], ["是否党员", 2], ["是否有亲属在本公司", 2]]);
+  assert.equal(result.skipped.noLabel, 0);
+  assert.ok(radios.every((control) => new Set(control.elements.map((el) => el.closest(".ant-radio-group"))).size === 1), "每组只装自己组里的选项");
+  assert.ok(radios.every((control) => scanner.isBindingCurrent(control, doc, { isVisible })), "刚扫描完的对应关系应当成立");
+});
+
 test("a range date picker yields a start and an end field under one title", () => {
   const doc = load(`
     <div class="row"><label class="row-label">在校时间</label>

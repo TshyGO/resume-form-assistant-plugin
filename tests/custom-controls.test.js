@@ -387,6 +387,42 @@ test('editable Element cascader query plus rejected leaf is not commitment',asyn
   h.target.root.onclick=()=>{const popup=h.w.document.createElement('div');popup.id='choices';popup.className='el-cascader__dropdown';popup.innerHTML='<div class="el-cascader-menu"><div class="el-cascader-node">广东省</div></div>';popup.firstChild.firstChild.onclick=()=>{popup.hidden=true;};h.w.document.body.append(popup);};
   assert.equal((await h.api.operate(h.target,'广东省')).reason,'selection_not_committed');
 });
+// #301 #417 element-ui 2.15.14 可搜索的 el-cascader：选中的叶子是 li.el-cascader-node.is-active，前面多一个 i.el-icon-check.el-cascader-node__prefix，
+// 没有 aria-checked、is-checked（2026-10-31 在 Chromium 里跑真组件看到的）。上一级只加 in-active-path。
+function elementCascader(onLeaf) {
+  const h = harness('<div class="el-cascader"><div class="el-input el-input--suffix"><input type="text" role="combobox" aria-controls="choices" class="el-input__inner" placeholder="请选择户口所在地"></div></div>', { timeoutMs: 250 });
+  h.target.controlKind = 'cascader'; h.target.root = h.el.closest('.el-cascader');
+  const node = (text, leaf) => `<li role="menuitem" tabindex="-1" class="el-cascader-node"${leaf ? '' : ' aria-haspopup="true"'}><span class="el-cascader-node__label">${text}</span>${leaf ? '' : '<i class="el-icon-arrow-right el-cascader-node__postfix"></i>'}</li>`;
+  h.el.onclick = () => {
+    const popup = h.w.document.createElement('div'); popup.id = 'choices'; popup.className = 'el-popper el-cascader__dropdown';
+    popup.innerHTML = `<div class="el-cascader-panel"><div class="el-scrollbar el-cascader-menu" role="menu"><ul class="el-cascader-menu__list">${node('北京市')}${node('上海市')}</ul></div></div>`;
+    popup.querySelectorAll('.el-cascader-node')[1].onclick = event => {
+      const parent = event.currentTarget; parent.classList.add('in-active-path'); parent.setAttribute('aria-expanded', 'true');
+      popup.firstChild.insertAdjacentHTML('beforeend', `<div class="el-scrollbar el-cascader-menu" role="menu"><ul class="el-cascader-menu__list">${node('浦东新区', true)}${node('徐汇区', true)}</ul></div>`);
+      popup.querySelector('.el-cascader-menu:last-child .el-cascader-node').onclick = leafEvent => onLeaf(leafEvent.currentTarget, popup, h);
+    };
+    h.w.document.body.append(popup);
+  };
+  return h;
+}
+test('a searchable Element UI 2 cascader counts its checked leaf as the selection', async () => {
+  const h = elementCascader((leaf, popup, h) => {
+    leaf.classList.add('is-active'); leaf.insertAdjacentHTML('afterbegin', '<i class="el-icon-check el-cascader-node__prefix"></i>');
+    h.el.value = '上海市 / 浦东新区'; h.el.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+  });
+  const result = await h.api.operate(h.target, '上海市 / 浦东新区');
+  assert.equal(result.ok, true, result.reason);
+});
+test('a searchable Element cascader leaf marked active without the check is not a selection', async () => {
+  const h = elementCascader((leaf, popup, h) => { leaf.classList.add('is-active'); h.el.value = '上海市 / 浦东新区'; popup.hidden = true; });
+  assert.equal((await h.api.operate(h.target, '上海市 / 浦东新区')).reason, 'selection_not_committed');
+  // 前面只有一个空的占位、不是那个勾（el-icon-check）的，也不算。
+  const empty = elementCascader((leaf, popup, h) => {
+    leaf.classList.add('is-active'); leaf.insertAdjacentHTML('afterbegin', '<span class="el-cascader-node__prefix"></span>');
+    h.el.value = '上海市 / 浦东新区'; popup.hidden = true;
+  });
+  assert.equal((await empty.api.operate(empty.target, '上海市 / 浦东新区')).reason, 'selection_not_committed');
+});
 
 test('cascade child wait follows a remounted owned popup and its busy state',async()=>{
   const h=harness('<div class="el-cascader"><input role="combobox" readonly aria-controls="choices"></div>',{timeoutMs:300});
