@@ -78,6 +78,22 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    // 像打字一样写进联想框（#301）：keydown、写值、input、keyup，不派发 change（真打字要到失焦才有）。
+    // 只在 keyup 后才去查建议的（YUI）也收得到。一次写整段字。键码只给字母和数字，别的给 0：
+    // 回车、Tab、Esc、方向键的键码会被联想框当成选中或收起。
+    function type(el, value, ctx) {
+      const View = el.ownerDocument?.defaultView;
+      const ViewKeyboardEvent = View?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      const last = Array.from(String(value ?? '')).pop() || '';
+      const code = /^[0-9a-z]$/i.test(last) ? last.toUpperCase().charCodeAt(0) : 0;
+      const key = name => ViewKeyboardEvent && el.dispatchEvent(new ViewKeyboardEvent(name, { key: last || 'Unidentified', keyCode: code, which: code, bubbles: true, cancelable: true }));
+      key('keydown');
+      write(el, value, ctx);
+      const ViewInputEvent = View?.InputEvent || (typeof InputEvent === 'function' ? InputEvent : null);
+      el.dispatchEvent(ViewInputEvent ? new ViewInputEvent('input', { bubbles: true, inputType: 'insertText', data: String(value ?? '') })
+        : new (View?.Event || Event)('input', { bubbles: true }));
+      key('keyup');
+    }
     function focus(el) { if (deps.focus) deps.focus(el); else el.focus?.(); }
     function blur(el) { if (deps.blur) deps.blur(el); else el.blur?.(); }
     function click(el, ctx, committing = false) {
@@ -178,7 +194,7 @@
     async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
-      const expected = deps.normalizeText(ctx.el, value);
+      let expected = deps.normalizeText(ctx.el, value);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
       if (!shown && !await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
@@ -195,6 +211,28 @@
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
+      }
+      // #301 写不进的普通文本框（大易 hotjob 的学校、专业，51job）：可能是只认从建议里选的联想框，框上没有任何下拉标记。
+      // 保持焦点、带按键再打一次字，等贴着它新冒出来的建议，只点和要填的字相同的一项；点了或者没有建议框，都失焦再核对。
+      // 只在框里换回了写之前的字时再试：这类框没选就还原。改成别的字的（页面改了格式）不再等建议，免得每个框白等。
+      if (!verdict.ok && !shown && verdict.reason === 'value_not_committed' && ctx.kind === 'text' && !deps.prefersSequential(ctx.el)
+        && String(ctx.el.value ?? '') === previous && scope.ResumeProCustomControls?.suggest) {
+        const picked = await scope.ResumeProCustomControls.suggest(ctx, String(value ?? ''), host);
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
+        if (picked.accepted || picked.typed) {
+          // 建议里的字和要填的只差大小写、空格、括号时，框里显示的是建议的写法。
+          const current = String(ctx.el.value ?? '');
+          if (helpers?.normalizeText?.(current) === helpers?.normalizeText?.(expected)) expected = current;
+          // 只打了字、没点建议的，失焦后被换掉仍算没写上，不算被退回。
+          const committed = Boolean(picked.accepted) && shows(ctx.el, expected);
+          blur(ctx.el);
+          await deps.waitTextCommit();
+          stopped = stop(ctx);
+          if (stopped) return result(false, stopped, ctx);
+          ctx.acceptedOnce = committed;
+          verdict = deps.inspectText(ctx.el, expected, committed);
+        } else if (picked.reason) verdict = { ok: false, reason: picked.reason };
       }
       if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
@@ -292,7 +330,7 @@
         if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
         if (custom) {
-          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
+          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, host);
           // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
           // 点了建议、组件没标出选中状态，但框里已经是要填的字（#299）：不算没选上，按文本框核对。
           if (outcome.reason && scope.ResumeProCustomControls.acceptsFreeText(ctx) && !stop(ctx)) {
@@ -302,6 +340,8 @@
           }
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;
+          // 联想框里打过字：随后才到的建议会再弹出来挡住后面的字段，发一个 Tab 收起（Element 收到后不再显示建议）。
+          if (outcome.closeSuggestions) pressTab(ctx.el);
           if (outcome.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
         } else if (ctx.kind === 'radio' && ctx.customRadio) {
           const custom = scope.ResumeProCustomControls;
@@ -378,9 +418,10 @@
       // An AntD picker often starts readonly, then opens an editable input. Writing
       // that input does not commit rc-picker state; choose an actual calendar cell.
       if (ctx.entry.pickerType === 'antd') return await antDate(ctx, raw);
+      if (ctx.entry.pickerType === 'jiandaoyun') return await jdyDate(ctx, raw);
       // #269 只读的日期框（智联 Element 日期选择器）：不能打字，按日历逐级点，和北森的日历共用一套。
       if (ctx.el.readOnly && scope.ResumeProCustomControls?.run) {
-        const outcome = await scope.ResumeProCustomControls.run(ctx, raw, { helpers, visible, click, stop, write, input, waitUntil, blur });
+        const outcome = await scope.ResumeProCustomControls.run(ctx, raw, host);
         return outcome.reason ? { reason: outcome.reason } : { accepted: outcome.accepted, dayDefaulted: outcome.dayDefaulted };
       }
       const expected = helpers?.normalizeDateValue?.(raw, ctx.entry.pickerInputType || 'date') ?? String(raw ?? '');
@@ -474,6 +515,120 @@
       }
       return { expected, mode };
     }
+
+    // #301 简道云日期框（.fx-form-datetime .x-datetime）：框里能打字，日历跟着跳到打的日子；可它要等日历收起
+    // （点日子、点框外面）才把日历指着的日子交给表单。只打字再失焦（#399），日历一直开着，表单里要等用户下次点别处才有值，
+    // 框里又改成了组件自己的格式（出生年月 1999-05-12 → 1999-05），按字面核对就报 value_reverted。
+    // 做法：点开日历，看它选日、选月还是选年（带时间的不处理）；按资料的精度打 YYYY-MM-DD / YYYY-MM / YYYY，
+    // 日历的年、月和选中的格子对上了，再点那一格：日历自己收起并提交。
+    // 选不成时收起自己点开的日历，表单里留原来的值，见 jdyRestore。
+    // 填写不按键：Esc 收起日历但不提交，框里留着打的字，表单里没有。只在选不成、原来为空又清不掉时用它收起。
+    function jdyDateParts(raw) {
+      const text = String(raw ?? '').trim();
+      const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helpers?.normalizeDateValue?.(text, 'date') || '');
+      const month = /^(\d{4})-(\d{2})$/.exec(helpers?.normalizeDateValue?.(text, 'month') || '');
+      const year = /^(\d{4})(?:年)?$/.exec(text);
+      const parts = day ? { year: day[1], month: day[2], day: day[3] } : month ? { year: month[1], month: month[2], day: '' }
+        : year ? { year: year[1], month: '', day: '' } : null;
+      if (!parts) return null;
+      const y = Number(parts.year), m = Number(parts.month || 1), d = Number(parts.day || 1);
+      const date = new Date(y, m - 1, d);
+      if (y < 1900 || y > 2100 || date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+      return parts;
+    }
+    const JDY_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    function jdyMonthOf(text) {
+      const value = String(text || '').trim().toLowerCase();
+      const digits = /^(\d{1,2})/.exec(value);
+      if (digits) return Number(digits[1]);
+      const index = JDY_MONTHS.findIndex(name => value.startsWith(name));
+      return index >= 0 ? index + 1 : 0;
+    }
+    async function jdyDate(ctx, raw) {
+      const doc = ctx.el.ownerDocument;
+      const root = ctx.el.closest?.('.fx-form-datetime .x-datetime');
+      if (!doc?.querySelectorAll || !root) return { reason: 'unsupported_control' };
+      const want = jdyDateParts(raw);
+      if (!want) return { reason: 'invalid_date' };
+      const popups = () => Array.from(doc.querySelectorAll('.x-popup.x-datetime-content')).filter(visible);
+      const before = new Set(popups());
+      const original = ctx.el.value;
+      const reason = click(ctx.el, ctx); if (reason) return { reason };
+      const opened = await waitUntil(ctx, doc.documentElement, () => {
+        const added = popups().filter(node => !before.has(node));
+        return added.length === 1 ? added[0] : null;
+      }, Boolean);
+      if (opened.reason) return { reason: opened.reason };
+      const popup = opened.value;
+      ctx.observed = { library: 'jiandaoyun', popupRole: 'calendar' };
+      const picked = await jdyPick(ctx, want, popup).catch(() => ({ reason: 'operation_failed' }));
+      if (picked.reason && !stop(ctx) && popup.isConnected && visible(popup)) await jdyRestore(ctx, root, popup, original);
+      return picked;
+    }
+    // 选不成时收起自己点开的日历，表单里留原来的值。框失焦再点框能收起日历，但会把日历指着的日子交给表单，
+    // 打过字就是打的那天（#301 评审在真组件上看到）。所以先把日历拨回原来的值再收：框里原来有字就写回去；
+    // 原来是空的就点框里的清除按钮，真组件上它收起日历、表单里还是空的（写回空字会被读成 1901-01-01）。
+    // 没有清除按钮，或点了没收起：在框上按 Esc，收起、不交给表单，框里留着打的字。
+    // 这样还开着才照旧失焦、点框收起：日历开着，下次点别处也会把它指着的日子交出去。
+    async function jdyRestore(ctx, root, popup, original) {
+      const doc = ctx.el.ownerDocument;
+      const gone = () => !popup.isConnected || !visible(popup);
+      const settle = () => waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
+      if (ctx.el.value !== original) {
+        if (original) { write(ctx.el, original, ctx); input(ctx.el); }
+        else {
+          const clear = root.querySelector('.clear-icon');
+          if (clear && !click(clear, ctx)) await settle();
+          const View = doc.defaultView;
+          if (!gone() && !stop(ctx) && View?.KeyboardEvent) {
+            ctx.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+            await settle();
+          }
+        }
+      }
+      if (!gone() && !stop(ctx)) {
+        blur(ctx.el);
+        await delay(0);
+        if (!stop(ctx) && !click(root, ctx)) await settle();
+      }
+      // 点清除按钮、按 Esc 后框还有焦点，让它失焦；点了清除按钮的，框里的字要等失焦才清掉。
+      if (!stop(ctx) && doc.activeElement === ctx.el) blur(ctx.el);
+    }
+    async function jdyPick(ctx, want, popup) {
+      const mode = popup.querySelector('.date-time-picker, .time-body, .week-cell') ? ''
+        : popup.querySelector('.date-body .day') ? 'date' : popup.querySelector('.date-month') ? 'month' : popup.querySelector('.date-year') ? 'year' : '';
+      if (!mode) return { reason: 'unsupported_control' };
+      // 资料只有年份，日历要选到月或日：不替用户编月份。
+      if (mode !== 'year' && !want.month) return { reason: 'invalid_date' };
+      const text = want.day ? `${want.year}-${want.month}-${want.day}` : want.month ? `${want.year}-${want.month}` : want.year;
+      const stopped = stop(ctx, true); if (stopped) return { reason: stopped };
+      write(ctx.el, text, ctx); input(ctx.el);
+      const year = () => (popup.querySelector('.date-head .btn-year')?.textContent || '').trim();
+      const usable = cell => cell && !cell.matches('.disabled, .oday') && !cell.querySelector('.disabled');
+      const target = () => {
+        if (mode === 'year') {
+          const cells = Array.from(popup.querySelectorAll('.date-year .item-cell')).filter(cell => cell.querySelector('.cell-btn.select'));
+          return cells.length === 1 && usable(cells[0]) && cells[0].textContent.trim() === want.year ? cells[0] : null;
+        }
+        if (year() !== want.year) return null;
+        if (mode === 'month') {
+          const cells = Array.from(popup.querySelectorAll('.date-month .item-cell'));
+          const chosen = cells.filter(cell => cell.querySelector('.cell-btn.select'));
+          return cells.length === 12 && chosen.length === 1 && cells.indexOf(chosen[0]) === Number(want.month) - 1 && usable(chosen[0]) ? chosen[0] : null;
+        }
+        if (jdyMonthOf(popup.querySelector('.date-head .btn-month')?.textContent) !== Number(want.month)) return null;
+        const days = Array.from(popup.querySelectorAll('.date-body .day.selected'));
+        return days.length === 1 && usable(days[0]) && days[0].textContent.trim() === String(Number(want.day || 1)) ? days[0] : null;
+      };
+      const found = await waitUntil(ctx, popup, target, Boolean);
+      // 日历没跳到这一天：多半是超出了表单允许的日期范围。
+      if (found.reason) return { reason: found.reason === 'verification_timeout' ? 'no_option_match' : found.reason };
+      const why = click(found.value, ctx, true); if (why) return { reason: why };
+      const closed = await waitUntil(ctx, popup, () => !popup.isConnected || !visible(popup), Boolean);
+      if (closed.reason) return { reason: closed.reason === 'verification_timeout' ? 'selection_not_committed' : closed.reason };
+      const expected = mode === 'year' ? want.year : mode === 'month' ? `${want.year}-${want.month}` : `${want.year}-${want.month}-${want.day || '01'}`;
+      return { expected, mode, dayDefaulted: mode === 'date' && !want.day };
+    }
     function check(target) {
       const el = target?.kind === 'radio' ? target.elements?.[0] : target?.kind === 'element' ? target.element : target;
       const saved = checks.get(el);
@@ -493,6 +648,8 @@
         return result(false, 'operation_failed', saved.ctx);
       }
     }
+    // 交给 custom-controls.js 的宿主操作：写值、派发事件、等待和核对都在这里。
+    const host = { helpers, visible, click, stop, write, input, type, waitUntil, blur, focus, timeoutMs };
     return { operate, check };
   }
   scope.ResumeProControls = { create, cleanHints, controlKinds: Object.freeze(Array.from(KINDS)) };
