@@ -178,6 +178,10 @@ impl ArchiveStore {
         self.transaction(|tx| tx.check_attachment_refs())
     }
 
+    pub fn purge_recycled_evidence(&self, id: &str, expected_blob: &str) -> Result<ReplyEvidence, StoreError> {
+        self.transaction(|tx| tx.purge_recycled_evidence(id, expected_blob))
+    }
+
     // ---- 待办 ----
 
     pub fn get_todo(&self, id: &str) -> Result<Option<Todo>, StoreError> {

@@ -1,4 +1,5 @@
 import { mountAttachmentList } from "./attachment-list.ts";
+import { openSettingsDialog, fragment, paragraph } from "./settings-dialog.ts";
 // D09「招聘通知」视图（原「证据收件箱」，#262 改版）：拖入 / 选择 / 粘贴 → 列表 → 预览 →
 // 关联与分类。左侧只列还没关联申请的材料，关联之后材料进对应申请的详情。
 //
@@ -9,6 +10,8 @@ import type {
   ApplicationSummary,
   EvidencePreview,
   EvidenceSummary,
+  EvidencePurgePreview,
+  EvidencePurgeResult,
   ImportReport,
   Invoke,
   Page,
@@ -123,6 +126,7 @@ export function mountInbox(
   let loaded = false;
   let listMode: "stored" | "recycled" = "stored";
   let refreshRevision = 0;
+  let countRevision = 0;
   let aiPanel: { unmount(): void } | null = null;
   let selectedId: string | null = null;
   let previewMode: "pending" | "stored" = "stored";
@@ -148,16 +152,27 @@ export function mountInbox(
     status.dataset.tone = message?.tone ?? "info";
   }
 
-  /** 重新读一遍待整理列表。读不出来时返回 false，并且**不**把列表画成空的。 */
-  async function refresh(): Promise<boolean> {
+  /** false 表示读取失败，null 表示已有更新的读取接手；都不覆盖现有内容。 */
+  async function refresh(): Promise<boolean | null> {
     const mode = listMode;
     const revision = ++refreshRevision;
+    const countTick = ++countRevision;
+    // The badge belongs to the stored list, even while another tab is open.
+    // Its request must not block recycling or replace the current preview.
+    const stored = invoke<EvidenceSummary[]>("list_inbox_cmd");
+    void stored.then(next => {
+      if (count && countTick === countRevision) count.textContent = String(next.length);
+    }, () => {
+      if (count && countTick === countRevision) count.textContent = "";
+    });
+    let listChanged = true;
     try {
-      const next = await invoke<EvidenceSummary[]>(mode === "recycled" ? "list_recycled_evidence_cmd" : "list_inbox_cmd");
-      if (revision !== refreshRevision || mode !== listMode) return false;
+      const next = await (mode === "stored" ? stored : invoke<EvidenceSummary[]>("list_recycled_evidence_cmd"));
+      if (revision !== refreshRevision || mode !== listMode) return null;
+      listChanged = !loaded || JSON.stringify(items) !== JSON.stringify(next);
       items = next;
     } catch (error) {
-      if (revision !== refreshRevision || mode !== listMode) return false;
+      if (revision !== refreshRevision || mode !== listMode) return null;
       say({ tone: "warn", text: `读不到招聘通知：${invokeError(error)}` });
       // 读失败不等于没有通知：已经显示的列表原样留着；从没读成功过就如实说读不出来，
       // 而不是摆出「没有待整理的招聘通知」的空状态。
@@ -165,12 +180,11 @@ export function mountInbox(
         list.innerHTML = `<div class="pane-empty"><h3>${mode === "recycled" ? "读不到回收站" : "读不到招聘通知"}</h3><p>请检查本机档案后重试。</p><button type="button">重新读取</button></div>`;
         list.querySelector("button")?.addEventListener("click", () => { say(null); void refresh(); });
         if (previewMode !== "pending") preview.innerHTML = '<div class="pane-empty" data-read-error><h2>暂时无法读取通知</h2><p>请点击列表中的「重新读取」重试。</p></div>';
-        if (count && mode === "stored") count.textContent = "";
       }
       return false;
     }
     loaded = true;
-    renderList();
+    if (listChanged) renderList(); // Foreground checks must not replace focused rows unnecessarily.
     // 邮箱候选由待确认页负责右侧预览；并行刷新待关联列表时不能把它覆盖掉。
     if (previewMode === "pending") return true;
     if (selectedId && !items.some((item) => item.id === selectedId)) {
@@ -182,8 +196,12 @@ export function mountInbox(
     } else if (!items.length) {
       clearAiPanel();
       preview.innerHTML = emptyState();
-    } else if (!selectedId && preview.querySelector?.(".workspace-empty, [data-read-error]")) {
-      preview.innerHTML = emptyPreview;
+    } else if (!selectedId && preview.querySelector?.(".workspace-empty, [data-read-error], [data-list-loading]")) {
+      // The latest refresh owns the loading placeholder even if it superseded
+      // the request started by showStored/showRecycled.
+      preview.innerHTML = listMode === "recycled"
+        ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件、恢复到原位置，或永久删除。</p></div>'
+        : emptyPreview;
     }
     return true;
   }
@@ -210,7 +228,6 @@ export function mountInbox(
 
   function renderList() {
     shell?.classList.toggle("is-empty", loaded && !items.length);
-    if (count && listMode === "stored") count.textContent = loaded ? String(items.length) : "";
     if (!loaded) {
       list.innerHTML = '<p class="todo-list-note muted">正在读取…</p>';
       return;
@@ -332,7 +349,7 @@ export function mountInbox(
       clearAiPanel(); clearAttachments?.(); clearAttachments = null;
       previewMode = "stored";
       renderList();
-      preview.innerHTML = '<p class="pane-loading muted">正在读取通知…</p>';
+      preview.innerHTML = '<p class="pane-loading muted" data-list-loading>正在读取通知…</p>';
       if (!await refresh()) return;
     }
     if (listMode !== "stored" || token !== previewToken) return;
@@ -350,9 +367,9 @@ export function mountInbox(
     const token = ++previewToken;
     previewMode = "stored"; clearAiPanel(); clearAttachments?.(); clearAttachments = null;
     renderList();
-    preview.innerHTML = '<p class="pane-loading muted">正在读取回收站…</p>';
+    preview.innerHTML = '<p class="pane-loading muted" data-list-loading>正在读取回收站…</p>';
     const refreshed = await refresh();
-    if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件，或恢复到原位置。</p></div>' : emptyState();
+    if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件、恢复到原位置，或永久删除。</p></div>' : emptyState();
   }
 
   function mailFacts(item: EvidencePreview) {
@@ -402,7 +419,7 @@ export function mountInbox(
             ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开</button>` : ""}
             ${recycled ? '<button type="button" data-act="restore" class="primary">恢复通知</button>' : `<button type="button" data-act="toggle-organizer" title="整理与关联（含 AI 整理）" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}<span>整理与关联</span></button>`}
             <button type="button" class="evidence-icon-button" data-act="toggle-reader" aria-pressed="${expanded}" aria-label="${readerLabel}" title="${readerLabel}">${expanded ? ICON.collapse : ICON.expand}</button>
-            ${recycled ? '' : `<button type="button" class="evidence-icon-button evidence-recycle-button" data-act="recycle" aria-label="移到回收站" title="移到回收站">${ICON.trash}</button>`}
+            ${recycled ? '<button type="button" class="evidence-recycle-button" data-act="purge">永久删除</button>' : `<button type="button" class="evidence-icon-button evidence-recycle-button" data-act="recycle" aria-label="移到回收站" title="移到回收站">${ICON.trash}</button>`}
           </div>
         </header>
         <div class="evidence-workspace">
@@ -515,6 +532,40 @@ export function mountInbox(
     if (acting) return;
     const selectionToken = previewToken;
     try {
+      if (action === "purge") {
+        setActing(true);
+        const confirmation = await invoke<EvidencePurgePreview>("preview_evidence_purge_cmd", { evidenceId: item.id });
+        if (selectionToken !== previewToken || selectedId !== item.id || listMode !== "recycled") return;
+        let result: EvidencePurgeResult | null = null;
+        const confirmed = await openSettingsDialog({
+          title: "永久删除这条通知？",
+          intro: confirmation.title,
+          body: fragment(
+            paragraph("将删除这条通知的正文、关联和 AI 整理建议，并清理不再被其他通知引用的原件及内嵌附件。申请、已记录的进度和待办保留。"),
+            confirmation.originalShared && paragraph("这份原件目前还被其他通知使用；只有删除时已无人引用的原件才会清理。"),
+            paragraph("删除后无法在回收站恢复。已有备份不会一并删除；邮箱中的邮件不受影响。", "settings-dialog-warn"),
+          ),
+          confirmLabel: "永久删除", busyLabel: "正在删除…", tone: "danger", size: "md",
+          action: async () => { result = await invoke<EvidencePurgeResult>("purge_recycled_evidence_cmd", { target: confirmation.target }); },
+          describeError: error => `删除失败：${invokeError(error)}`,
+        });
+        if (!confirmed || !result) return;
+        const done = result as EvidencePurgeResult;
+        const message = done.cleanupPending
+          ? "通知已永久删除，但原件文件尚未清理完成。可到设置中的附件检查重试清理。"
+          : `通知已永久删除。${done.originalShared ? "其他通知仍在使用的共用原件已保留。" : "不再被引用的原件及内嵌附件已清理。"}`;
+        // Drop the deleted body's local preview even if reloading the list fails.
+        items = items.filter(entry => entry.id !== item.id);
+        renderList();
+        if (selectedId === item.id) {
+          selectedId = null; previewToken += 1;
+          clearAiPanel(); clearAttachments?.(); clearAttachments = null;
+          preview.innerHTML = items.length ? emptyPreview : emptyState();
+        }
+        say({ tone: done.cleanupPending ? "warn" : "success", text: message });
+        if (await refresh() === false) say({ tone: "warn", text: `${message}列表暂时无法刷新，请稍后重新读取。` });
+        return;
+      }
       if (action === "recycle" || action === "restore") {
         setActing(true);
         await invoke("set_evidence_recycled_cmd", { evidenceId: item.id, recycled: action === "recycle" });
@@ -619,7 +670,7 @@ export function mountInbox(
         if (listMode === "recycled") await showStored();
       }
       const refreshed = await refresh();
-      if (!refreshed) {
+      if (refreshed === false) {
         say({ tone: "warn", text: `${message.text}列表刷新失败，${stored ? "材料已保存，无需重复导入。" : "内容仍保留，可重试导入。"}` });
       }
       // 只导入了一条新的：直接打开它，省得再去列表里找。
