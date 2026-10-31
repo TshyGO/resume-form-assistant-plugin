@@ -484,7 +484,7 @@
     }
     // Every helper this script calls must have loaded. A page element or frame named "module"
     // once kept one from loading (#275), and the page then must not show as connected.
-    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProCustomControls",
+    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProAntdPrefix", "ResumeProCustomControls",
       "ResumeProControls", "ResumeProProfile", "ResumeProResumeData", "ResumeProFormAgent", "ResumeProFillProbe",
       "ResumeProFieldScan", "ResumeProPageOutline", "ResumeProDeepAnalysis", "ResumeProPageActions",
       "ResumeProPageRecipe", "ResumeProSidebarState"];
@@ -4725,6 +4725,21 @@
     return "";
   }
 
+  // #301 antd 换了类名前缀（飞书招聘 atsx-，见 antd-prefix.js）：换了前缀的类名再补一份 ant- 的写法，按 antd 的类名比对；
+  // 选择器里的 .ant- 按节点所在文档的前缀展开。
+  function antdClassText(node) {
+    const antd = self.ResumeProAntdPrefix;
+    const text = classText(node);
+    if (!antd || !text) return text;
+    const tokens = text.split(/\s+/);
+    const renamed = tokens.map((token) => antd.token(node, token)).filter((token, index) => token !== tokens[index]);
+    return renamed.length ? `${text} ${renamed.join(" ")}` : text;
+  }
+
+  function antdCss(node, selector) {
+    return self.ResumeProAntdPrefix?.css(node, selector) ?? selector;
+  }
+
   function isShown(node) {
     let current = node;
     const doc = docOf(node);
@@ -4760,7 +4775,7 @@
     }
     const className = classText(node);
     return /(?:^|[\s_])(?:error|has-error|is-error|is-invalid|invalid-feedback|field-error|form-error)(?:$|[\s_])/i.test(className)
-      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(className);
+      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(antdClassText(node));
   }
 
   function listOtherControls(root, skip) {
@@ -4850,7 +4865,7 @@
 
   function containerFrameworkUnsynced(element) {
     const container = associatedContainer(element);
-    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
+    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(antdClassText(container));
   }
 
   // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
@@ -5201,7 +5216,7 @@
   function watchOverlays(control) {
     const visibleOverlays = () => {
       try {
-        return Array.from(docOf(control).querySelectorAll(OVERLAY_SELECTOR))
+        return Array.from(docOf(control).querySelectorAll(antdCss(control, OVERLAY_SELECTOR)))
           .filter((node) => !node.contains(control) && !node.closest(`#${SIDEBAR_ID}`) && isVisible(node));
       } catch {
         return [];
@@ -5349,7 +5364,7 @@
     }
 
     if (fieldEntry?.pickerType) {
-      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime") || element];
+      return [element.closest(antdCss(element, ".ant-picker, .el-date-editor, [class*='date-picker'], .fx-form-datetime .x-datetime")) || element];
     }
 
     return [element];
