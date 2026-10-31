@@ -146,12 +146,16 @@
       clearOffer();
     } else say(errors[result?.status] || errors.unavailable, 'error');
   }
-  function excerptFailed(result) {
+  function excerptFailed(result, chosen) {
     // Acceptance consumed the binding before transfer. Never leave a retry
-    // button wired to that spent target, or revive a potentially stale snapshot.
-    clearOffer();
+    // button wired to that spent Gmail target. Other providers can retry the
+    // unchanged proposal, unless its tab or archive has changed in the meantime.
+    if (chosen.target || result?.status === 'archive_changed' || pending !== chosen) clearOffer();
     const reason = result?.status !== 'unavailable' ? errors[result?.status] : '';
-    say(`${reason || '尚未确认摘录保存成功，请检查桌面连接。'} 请点击「${saveLabel()}」重新读取邮件后重试。`, 'error');
+    const retry = pending === chosen
+      ? '连接恢复后可再次点击「保存网页摘录」重试。'
+      : `请点击「${saveLabel()}」重新读取邮件后重试。`;
+    say(`${reason || '尚未确认摘录保存成功，请检查桌面连接。'} ${retry}`, 'error');
   }
   button.addEventListener('click', async () => {
     if (busy || !supported) return;
@@ -188,16 +192,24 @@
     const chosen = pending;
     const selected = selectedApplication?.applicationId || null;
     setBusy(true); say('正在保存网页摘录…');
+    let sending = false;
     try {
       const [front] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (front?.id !== chosen.tab.id || front?.url !== chosen.tab.url || !await validateTarget(chosen.tab, chosen) || pending !== chosen) {
         clearOffer(); say(errors.changed, 'error'); return;
       }
+      sending = true;
       const result = await send('excerpt', { excerpt: chosen.excerpt }, selected);
       if (result?.status === 'saved') saved(result, 'excerpt');
-      else excerptFailed(result);
+      else excerptFailed(result, chosen);
     }
-    catch { excerptFailed(); }
+    catch {
+      if (sending) excerptFailed(undefined, chosen);
+      else {
+        clearOffer();
+        say('无法核验当前邮箱页面，页面可能已刷新或切换。请重新读取邮件后重试。', 'error');
+      }
+    }
     finally { setBusy(false); }
   });
   cancel.addEventListener('click', () => { clearOffer(); say('已取消保存摘录。'); });

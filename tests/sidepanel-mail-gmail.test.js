@@ -153,3 +153,14 @@ test('cancelling Gmail excerpts discards the proposal without validating or arch
   assert.deepEqual(p.calls.map(call => call.msg.type), ['WEBMAIL_CAPTURE', 'WEBMAIL_DISCARD']);
   assert.equal(p.get('mail-excerpt-offer').hidden, true);
 });
+
+test('content-script channel failures during excerpt validation report the mailbox page and never contact desktop', async t => {
+  const p = await panel(excerpt); t.after(p.close);
+  p.get('mail-save-button').click(); await p.flush();
+  p.validation(()=>{throw new Error('content script unloaded');});
+  p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.calls.filter(call=>call.destination==='desktop').length,0);
+  assert.equal(p.get('mail-excerpt-offer').hidden,true);
+  assert.match(p.get('mail-save-status').textContent,/无法核验当前邮箱页面.*重新读取邮件/);
+  assert.doesNotMatch(p.get('mail-save-status').textContent,/桌面连接/);
+});
