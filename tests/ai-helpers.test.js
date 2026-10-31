@@ -510,6 +510,44 @@ test("rules: a key that names the ID or mobile itself fills it even if it also r
   }
 });
 
+// 字段名认不出、只能按值猜时，长得明确是手机号的不算证件号，长得明确是身份证号的不算电话：
+// 「号码1」「号码2」不管谁排前面、网页先问哪一题，都不互相顶替。
+test("rules: unnamed keys holding a mobile and an ID number do not swap in either order", () => {
+  const mobile = { group: "补充字段", key: "号码1", value: "13800138000" };
+  const idNumber = { group: "补充字段", key: "号码2", value: "11010119900307123X" };
+  const plainId = { group: "补充字段", key: "号码2", value: "110101199003071234" };
+  for (const resume of [[mobile, idNumber], [idNumber, mobile], [mobile, plainId], [plainId, mobile]]) {
+    const id = resume.find((item) => item !== mobile).value;
+    for (const forms of [
+      [textField("id", "证件号码"), textField("phone", "手机号码")],
+      [textField("phone", "手机号码"), textField("id", "证件号码")]
+    ]) {
+      assert.deepEqual(ruleValues(forms, resume), { id, phone: "13800138000" }, `${resume.map((r) => r.value)} / ${forms.map((f) => f.fieldId)}`);
+    }
+  }
+  // 两样都说不准的号码照旧按值猜。
+  assert.deepEqual(ruleValues([textField("phone", "联系电话")], [{ group: "补充字段", key: "Tel", value: "010-62345678" }]), { phone: "010-62345678" });
+  assert.deepEqual(ruleValues([textField("id", "证件号码")], [{ group: "补充字段", key: "号码1", value: "12345678" }]), { id: "12345678" });
+});
+
+// 姓名和出生日期也只看字段名：分组「姓名与性别」下排在前面的性别不进姓名框，
+// 分组名带「出生」的毕业时间不进出生日期框。字段名认不出的才看分组名。
+test("rules: a group name does not turn a named field of another kind into the name or birth date", () => {
+  assert.deepEqual(ruleValues([textField("name", "姓名"), textField("gender", "性别")], [
+    { group: "姓名与性别", key: "性别", value: "女" },
+    { group: "姓名与性别", key: "姓名", value: "李亚男" }
+  ]), { name: "李亚男", gender: "女" });
+  assert.deepEqual(ruleValues([textField("birth", "出生日期")], [
+    { group: "出生与毕业", key: "毕业时间", value: "2023-06" },
+    { group: "基本信息", key: "出生年月", value: "2001-05" }
+  ]), { birth: "2001-05" });
+  // 字段名是 schoolName 这类认作「姓名」以外类别的，分组带「姓名」也不算；认不出的「中文」照旧按分组名。
+  assert.deepEqual(ruleValues([textField("name", "姓名")], [
+    { group: "姓名", key: "性别", value: "女" },
+    { group: "姓名", key: "中文", value: "李亚男" }
+  ]), { name: "李亚男" });
+});
+
 // 以前证件类型、学历、学位、年月这类下拉框被挡在 AI 外面，本地规则又不处理，永远填不上。
 test("worker: choice fields the rules cannot fill are sent to AI with their options", async () => {
   let body = null;

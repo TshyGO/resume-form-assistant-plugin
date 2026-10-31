@@ -31,6 +31,9 @@
   const SEMANTIC_KEYWORDS = FIELD_SEMANTICS.map((item) => ({ type: item.type, keywords: item.keywords.map(normalizeText) }));
   // 表里没有、但看得出是别的号码的简历字段名：不是手机也不是证件号，不按值去猜。
   const OTHER_NUMBER_KEY = /微信|wechat|qq|学号|学生证|工号|准考证|考生号|报名号|学籍|证书|编号|卡号|账号|帐号|邮编|邮政编码/;
+  // 字段名认不出、只能按值猜手机和证件号时用（isResumeFieldMatch）。
+  const MOBILE_VALUE = /^(\+?86)?1[3-9]\d{9}$/;
+  const CN_ID_VALUE = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dxX]$/;
 
   function detectCascadeGroups(fields, fieldMap) {
     const selectFields = fields.filter((f) => f.tagName === "select");
@@ -517,27 +520,30 @@
     // 不带的，字段名认得出是哪一类（微信、准考证号、姓名）就只按名字算，认不出的（自定义的「号码1」）才看分组名和值：
     // 手机号也是 8 到 18 位数字，纯数字的身份证号也像电话，按值算会让排在前面的那项填进另一个框；
     // 分组名同理，「证件信息」下的准考证号、「手机与微信」下的微信不是证件号码和手机。
-    const byKeyName = (words, pattern, text = value) => {
+    const byKeyName = (words, valueFits) => {
       if (words.some((word) => ownKey.includes(word))) return true;
       const type = keyType();
-      return type ? type === semantic : words.some((word) => keyText.includes(word)) || pattern.test(text);
+      return type ? type === semantic : words.some((word) => keyText.includes(word)) || valueFits();
     };
+    // 按值猜时，明确是大陆手机号的不当证件号，明确是 18 位身份证号的不当电话：「号码1」「号码2」谁排前面都不互相顶替。
+    const compact = value.replace(/[\s-]/g, "");
 
     switch (semantic) {
       case "name":
-        return keyText.includes("姓名") && !keyText.includes("拼音");
+        // 分组名只给认不出的字段名用（分组「姓名」下的「中文」）；schoolName 这类认作别的类，不看分组。
+        return (ownKey.includes("姓名") || (!keyType() && keyText.includes("姓名"))) && !keyText.includes("拼音");
       case "email":
         return /@/.test(value) || keyText.includes("邮箱") || keyText.includes("email");
       case "phone":
-        return byKeyName(["手机", "电话"], /^(\+?\d[\d\s-]{7,})$/);
+        return byKeyName(["手机", "电话"], () => /^(\+?\d[\d\s-]{7,})$/.test(value) && !CN_ID_VALUE.test(compact));
       case "gender":
         // 按值猜只收整个值就是性别的，带「女」字的经历描述不算。
-        return byKeyName(["性别"], /^(男|女|男性|女性|male|female)$/i);
+        return byKeyName(["性别"], () => /^(男|女|男性|女性|male|female)$/i.test(value));
       case "birth_date":
         // 日期看不出是谁的：毕业时间、实习起止时间也是这个样子，出生日期只按名字认。
-        return /出生|生日|birth/.test(keyText) || keyType() === "birth_date";
+        return /出生|生日|birth/.test(ownKey) || keyType() === "birth_date";
       case "id_number":
-        return byKeyName(["身份证", "证件"], /^[0-9xX]{8,18}$/, value.replace(/\s/g, ""));
+        return byKeyName(["身份证", "证件"], () => /^[0-9xX]{8,18}$/.test(value.replace(/\s/g, "")) && !MOBILE_VALUE.test(compact));
       case "hometown":
         return isSameRegionTopic(resumeField, formField);
       case "region":
