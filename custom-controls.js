@@ -1157,7 +1157,7 @@
   // （Element 的对话框在 window 上听 Esc，只关最上面一层），还开着就在页面空白处按下、松开。关不掉就让它开着。
   const LAYERS = `${DIALOGS}, ${POPUPS}, [class*="popover" i], [class*="popper" i], [class*="popup" i], [class*="dropdown" i], [class*="picker-panel" i]`;
   function openLayers(doc, visible) {
-    return doc?.querySelectorAll ? new Set(Array.from(doc.querySelectorAll(LAYERS)).filter(visible)) : null;
+    return doc?.querySelectorAll ? new Set(Array.from(doc.querySelectorAll(antd(doc, LAYERS))).filter(visible)) : null;
   }
   async function dismissOpened(ctx, before, h) {
     const el = ctx.el, doc = el?.ownerDocument;
@@ -1168,7 +1168,7 @@
     const layer = outer[0], gone = () => !layer.isConnected || !h.visible(layer);
     const dialog = dialogOf(el);
     // 聚焦之前页面上就开着别的对话框、又不装着这个框：Esc 可能关掉它，在页面上按也可能算点了它外面，都不做。
-    if (!dialog && Array.from(before).some(node => node.isConnected && h.visible(node) && node.matches(DIALOGS) && !node.contains(el))) return;
+    if (!dialog && Array.from(before).some(node => node.isConnected && h.visible(node) && node.matches(antd(node, DIALOGS)) && !node.contains(el))) return;
     if (dialog) {
       // 浮层就画在框旁边（和框在同一个组件里）时，在装着两者的那一层外面按，组件才算点了外面。
       let near = el;
