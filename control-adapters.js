@@ -528,9 +528,12 @@
       ctx.observed = { library: 'antd', popupRole: 'calendar' };
       // 带时间的面板（TimePicker、showTime 的日期框）这里只会点年、月、日：收起日历，框能打字就按文本框打字，
       // 和没认出 antd 时一样（#301 换了前缀的 antd 5 这样能填上；antd 4 失焦时不收打的字，照样报没写上）；框只读的报控件暂不支持。
+      // 带时间的区间日期（RangePicker showTime）不打字：一次只写得进开始或结束一个框，填不成一个区间，
+      // 和不带时间的区间日期一样报控件暂不支持。
       const timed = Boolean(popup.querySelector(antd(popup, '.ant-picker-time-panel')));
+      const range = Boolean(ctx.el.closest?.(antd(ctx.el, '.ant-picker-range')));
       // 页面异常也按失败收尾；只把固定的原因码交出去。
-      const picked = timed ? { reason: 'unsupported_control', typeText: true }
+      const picked = timed ? { reason: 'unsupported_control', typeText: !range }
         : await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
       // 选不成时收起自己点开的日历，免得挡住后面的字段：让输入框失焦（见 leavePicker），组件里的值不变。
       // 不按键、不点页面别处；原本就开着的、用户停下或改了内容的不动。

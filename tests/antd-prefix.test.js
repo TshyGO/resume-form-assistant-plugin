@@ -419,7 +419,8 @@ const TIMED = { time: { label: "可面试时间", placeholder: "请选择时间"
 const timedPicker = (p, id, readOnly = false) => `<div class="${p}-picker ${p}-picker-outlined"><div class="${p}-picker-input">`
   + `<input${readOnly ? " readonly" : ""} autocomplete="off" size="10" id="${id}" placeholder="${TIMED[id].placeholder}" value="">`
   + `<span class="${p}-picker-suffix"><span role="img" aria-label="clock-circle" class="anticon anticon-clock-circle"></span></span></div></div>`;
-function wireTimed(doc, p, picked) {
+// kind 是 time（只有时间面板）或 datetime（日期面板加时间面板）。
+function timedPanel(p, kind) {
   const column = (type) => `<ul class="${p}-picker-time-panel-column" data-type="${type}">${["00", "01", "02"].map((text, i) => `<li class="${p}-picker-time-panel-cell" data-value="${i}">`
     + `<div class="${p}-picker-time-panel-cell-inner">${text}</div></li>`).join("")}</ul>`;
   const timePanel = `<div class="${p}-picker-time-panel"><div class="${p}-picker-content">${column("hour")}${column("minute")}</div></div>`;
@@ -427,6 +428,12 @@ function wireTimed(doc, p, picked) {
     + `<div class="${p}-picker-header-view"><button type="button" class="${p}-picker-month-btn">Oct</button><button type="button" class="${p}-picker-year-btn">2026</button></div>`
     + `<button type="button" class="${p}-picker-header-super-next-btn"></button></div><div class="${p}-picker-body"><table class="${p}-picker-content"><tbody><tr>`
     + `<td title="2026-10-01" class="${p}-picker-cell ${p}-picker-cell-in-view"><div class="${p}-picker-cell-inner">1</div></td></tr></tbody></table></div></div>`;
+  return `<div class="${p}-picker-panel-container ${p}-picker-${kind}-panel-container"><div class="${p}-picker-panel-layout"><div><div class="${p}-picker-panel">`
+    + (kind === "time" ? timePanel : `<div class="${p}-picker-datetime-panel">${datePanel}${timePanel}</div>`)
+    + `<div class="${p}-picker-footer"><ul class="${p}-picker-ranges"><li class="${p}-picker-ok"><button type="button" class="${p}-btn ${p}-btn-primary ${p}-btn-sm">OK</button></li></ul></div>`
+    + "</div></div></div></div>";
+}
+function wireTimed(doc, p, picked) {
   for (const [id, spec] of Object.entries(TIMED)) {
     const field = doc.getElementById(id);
     if (!field) continue;
@@ -434,11 +441,7 @@ function wireTimed(doc, p, picked) {
     field.addEventListener("mousedown", () => {
       if (!dropdown) {
         dropdown = doc.createElement("div");
-        const kind = id === "time" ? "time" : "datetime";
-        dropdown.innerHTML = `<div class="${p}-picker-panel-container ${p}-picker-${kind}-panel-container"><div class="${p}-picker-panel-layout"><div><div class="${p}-picker-panel">`
-          + (kind === "time" ? timePanel : `<div class="${p}-picker-datetime-panel">${datePanel}${timePanel}</div>`)
-          + `<div class="${p}-picker-footer"><ul class="${p}-picker-ranges"><li class="${p}-picker-ok"><button type="button" class="${p}-btn ${p}-btn-primary ${p}-btn-sm">OK</button></li></ul></div>`
-          + "</div></div></div></div>";
+        dropdown.innerHTML = timedPanel(p, id === "time" ? "time" : "datetime");
         doc.body.append(dropdown);
       }
       dropdown.className = `${p}-picker-dropdown ${p}-picker-dropdown-placement-bottomLeft`;
@@ -526,6 +529,53 @@ test("a read-only time picker is left untouched and reported unsupported", async
     assert.equal(outcome.reason, "unsupported_control", `${p}: ${JSON.stringify(outcome)}`);
     assert.equal(doc.getElementById("time").value, "");
     assert.deepEqual(picked, []);
+    assert.ok(doc.querySelector(`.${p}-picker-dropdown`).hidden, `${p}: the calendar is closed`);
+  }
+});
+
+// antd 5 带时间的区间日期（RangePicker showTime，2026-10-31 在 Chromium 里看到的 5.21.6）：一个根下开始、结束两个能打字的框，
+// 弹层是 X-picker-dropdown-range，里面只有一个日期加时间的面板。替身失焦就收起；框里的字合乎格式就收下。
+const rangePicker = (p, id) => `<div class="${p}-picker ${p}-picker-range ${p}-picker-outlined">`
+  + `<div class="${p}-picker-input"><input autocomplete="off" size="18" id="${id}" placeholder="开始日期" date-range="start" value=""></div>`
+  + `<div class="${p}-picker-range-separator"><span aria-label="to" class="${p}-picker-separator"></span></div>`
+  + `<div class="${p}-picker-input"><input autocomplete="off" size="18" placeholder="结束日期" date-range="end" value=""></div>`
+  + `<div class="${p}-picker-active-bar"></div><span class="${p}-picker-suffix"><span role="img" aria-label="calendar" class="anticon anticon-calendar"></span></span></div>`;
+function wireRange(doc, p, picked) {
+  const dropdown = doc.createElement("div");
+  dropdown.hidden = true;
+  dropdown.innerHTML = `<div class="${p}-picker-range-wrapper ${p}-picker-date-range-wrapper"><div class="${p}-picker-range-arrow"></div>${timedPanel(p, "datetime")}</div>`;
+  doc.body.append(dropdown);
+  for (const field of doc.querySelectorAll(`.${p}-picker-range input`)) {
+    field.addEventListener("mousedown", () => {
+      dropdown.className = `${p}-picker-dropdown ${p}-picker-dropdown-range ${p}-picker-dropdown-placement-bottomLeft`;
+      dropdown.hidden = false;
+    });
+    field.addEventListener("focusout", () => {
+      dropdown.hidden = true;
+      dropdown.classList.add(`${p}-picker-dropdown-hidden`);
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(field.value)) picked.push(`${field.getAttribute("date-range")}=${field.value}`);
+      else field.value = "";
+    });
+  }
+}
+
+// 只往一个框里打字填不成区间：开始、结束都不写，报控件暂不支持，日历收起。
+test("a date range picker with time is left untouched and reported unsupported", async () => {
+  for (const p of ["ant", "atsx"]) {
+    const page = await openFramedPage({ top: `<main><form class="${p}-form ${p}-form-vertical">${item(p, "name", "姓名", input(p, "name"))}`
+      + `${item(p, "period", "实习时间", rangePicker(p, "period"))}</form></main>` });
+    const doc = page.win.document;
+    const picked = [];
+    wireRange(doc, p, picked);
+    const controls = page.win.ResumeProFieldScan.scanPage(doc, { isVisible }).controls;
+    for (const [label, value] of [["实习时间（开始）", "2023-07-01 09:00"], ["实习时间（结束）", "2023-09-30 18:00"]]) {
+      const found = control(controls, label);
+      assert.equal(found.pickerType, "antd", `${p} ${label}`);
+      const outcome = await page.hooks.operateControl(found, value);
+      assert.equal(outcome.reason, "unsupported_control", `${p} ${label}: ${JSON.stringify(outcome)}`);
+    }
+    assert.deepEqual(Array.from(doc.querySelectorAll(`.${p}-picker-range input`), (field) => field.value), ["", ""], p);
+    assert.deepEqual(picked, [], p);
     assert.ok(doc.querySelector(`.${p}-picker-dropdown`).hidden, `${p}: the calendar is closed`);
   }
 });
