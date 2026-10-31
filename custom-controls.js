@@ -677,8 +677,9 @@
       const caughtUp = seen => {
         if (!seen) return true;
         if ((seen.headYear && seen.headYear !== want.y) || (seen.headMonth && seen.headMonth !== want.m)) return false;
-        if (seen.picked.length) return seen.picked.includes(want.d);
-        return face(seen) !== untyped;
+        // 标题认不出年月时，选中的日子没变不算跟上（原来选着的可能正好是同一天），要等日历上的字也变了。
+        if (seen.picked.length && seen.headYear && seen.headMonth) return seen.picked.includes(want.d);
+        return face(seen) !== untyped && (!seen.picked.length || seen.picked.includes(want.d));
       };
       // 只有 antd 3 / ant-design-vue 1.x 的日历（.ant-calendar-input）自己接打的字；北森、Element 这类要回车才收，不等，过一拍就回车。
       const followsTyping = input.classList.contains('ant-calendar-input');

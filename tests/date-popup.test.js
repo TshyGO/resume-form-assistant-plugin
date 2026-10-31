@@ -130,6 +130,14 @@ test("a calendar drawn into an empty floating container that is always there is 
   assert.equal(h.field.value, "2002-05-12");
 });
 
+// 标题认不出、日历原来选着同一天（1 月 12 日）：选中的日子没变不算跟上，等标题也换了再回车。
+test("ant-design-vue 1.x with an unreadable header and the same day already chosen waits for the header to change", async () => {
+  const h = antCalendar({ lag: 40, english: true, value: "2001-01-12" });
+  const result = await h.api.operate(h.target, "2002-05-12");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.field.value, "2002-05-12");
+});
+
 test("antd 3 (React) takes the typed date at once and is not slowed down", async () => {
   const h = antCalendar({ lag: null });
   const result = await h.api.operate(h.target, "2002-05-12");
@@ -457,6 +465,13 @@ test("a span of two dates gives the start or the end only when the question says
   // 没写、两样都写了：原样交回，由日期控件报日期不对。
   assert.equal(pick("2019.09-2023.06", "在校时间"), "2019.09-2023.06");
   assert.equal(pick("2019.09-2023.06", "起止时间"), "2019.09-2023.06");
+  // 「起」「止」单独成词才算（「（起）」「止：」），别的词里带的不算。
+  assert.equal(pick("2019.09-2023.06", "在校时间（起）"), "2019.09");
+  assert.equal(pick("2019.09-2023.06", "在校时间 止"), "2023.06");
+  assert.equal(pick("2019.09-2023.06", "起始日期"), "2019.09");
+  assert.equal(pick("2019.09-2023.06", "发起时间"), "2019.09-2023.06");
+  assert.equal(pick("2019.09-2023.06", "起薪日期"), "2019.09-2023.06");
+  assert.equal(pick("2019.09-2023.06", "出生日期 请选择日期，禁止填写未来日期"), "2019.09-2023.06");
   // 不是正好两个日期的不动。
   assert.equal(pick("2019.09", "开始时间"), "2019.09");
   assert.equal(pick("2019.09-至今", "开始时间"), "2019.09-至今");
