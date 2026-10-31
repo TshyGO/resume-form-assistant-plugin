@@ -528,7 +528,7 @@ export function mountInbox(
           intro: confirmation.title,
           body: fragment(
             paragraph("将删除这条通知的正文、关联和 AI 整理建议，并清理不再被其他通知引用的原件及内嵌附件。申请、已记录的进度和待办保留。"),
-            confirmation.originalShared && paragraph("这份原件还被其他通知使用，共用文件会保留。"),
+            confirmation.originalShared && paragraph("这份原件目前还被其他通知使用；只有删除时已无人引用的原件才会清理。"),
             paragraph("删除后无法在回收站恢复。已有备份不会一并删除；邮箱中的邮件不受影响。", "settings-dialog-warn"),
           ),
           confirmLabel: "永久删除", busyLabel: "正在删除…", tone: "danger", size: "md",

@@ -176,7 +176,7 @@ test.each([true, false])("shared originals and incomplete file cleanup are accur
   h.handlers.purge_recycled_evidence_cmd = () => { h.rows.splice(0); return {originalShared:shared,cleanupPending:!shared}; };
   fireEvent.click(await openRecycled(h));
   const dialog = await within(document.body).findByRole("dialog");
-  if (shared) expect(dialog.textContent).toContain("共用文件会保留");
+  if (shared) expect(dialog.textContent).toContain("只有删除时已无人引用的原件才会清理");
   fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
   await waitFor(() => expect(el("inbox-status").textContent).toContain(shared ? "共用原件已保留" : "原件文件尚未清理完成"));
 });
