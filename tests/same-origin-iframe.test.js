@@ -486,3 +486,16 @@ test("a form on the top page is filled as before, with plain field ids and no fr
   assert.ok(lines(status.diagnosticsReport).includes("dom_inputs: 7"), status.diagnosticsReport);
   assert.ok(page.win.document.getElementById("xm").classList.contains("resume-pro__field-highlight"));
 });
+
+test("a date-style text box and a number box in a frame are written in the form they ask for", async () => {
+  const form = `<form class="info">
+  <div class="row"><label for="cs">出生年月</label><input id="cs" placeholder="YYYY/MM"></div>
+  <div class="row"><label for="sg">身高</label><input id="sg" type="number"></div>
+</form>`;
+  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: form },
+    values: { 出生年月: "1998-06", 身高: "175cm" } });
+  const result = await page.fill();
+  assert.equal(result.outcome, "success", result.error);
+  assert.equal(page.frame("main").getElementById("cs").value, "1998/06");
+  assert.equal(page.frame("main").getElementById("sg").value, "175");
+});
