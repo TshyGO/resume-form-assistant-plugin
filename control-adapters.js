@@ -321,7 +321,8 @@
       // #301 #417 只读的框写不上：多半是网页自己的选择框（智联的城市、学校、专业，点开是对话框、el-popover 或自制浮层），要在网页里选。
       // 照样先写过了（v-model 绑定的只读框、读输入框值的组件写得上）；写不上的单独报，聚焦时网页打开的收起来。
       if (readonly && !verdict.ok && rejected(verdict.reason)) {
-        if (layersBefore) await scope.ResumeProCustomControls.dismissOpened?.(ctx, layersBefore, host);
+        // 收起之前让宿主记下冒出过弹层（诊断的 overlay=），收起以后它就看不到了。
+        if (layersBefore) { ctx.options.beforeDismiss?.(); await scope.ResumeProCustomControls.dismissOpened?.(ctx, layersBefore, host); }
         return result(false, 'readonly_picker', ctx, after ? { after } : {});
       }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。

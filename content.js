@@ -5239,7 +5239,9 @@
       // 没有 MutationObserver 时只在结束时看一次。
     }
     const calendarOpen = () => visibleOverlays().some((node) => !before.has(node) && isCalendarOverlay(node));
-    return { kind: () => kind, settled, stop, calendarOpen };
+    // 插件自己要收起网页打开的弹层之前（#301 #417 只读框写不上），先看一眼：防抖的那一次可能还没到，收起以后就看不到了。
+    const peek = () => { if (!done && look()) stop(); };
+    return { kind: () => kind, settled, stop, calendarOpen, peek };
   }
 
   // fill：一键填写（含辅助新增）。只有它按框的要求整理要写的字、看写入后的弹层；侧栏和字段卡片的手动写入照原样写。
@@ -5253,7 +5255,8 @@
     // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
     if (watch) overlayWatches.set(control, watch);
     else if (control && typeof control === 'object') overlayWatches.delete(control);
-    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
+    let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill,
+      beforeDismiss: () => watch?.peek() });
     if (result.ok && watch && isInputElement(control) && await calendarKeptOpen(watch, control, value)) {
       result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
     }
