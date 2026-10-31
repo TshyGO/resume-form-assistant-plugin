@@ -106,6 +106,13 @@
     }
     return null;
   }
+  // 按下、松开，不派发 click：网页可能把点了外面当成要保存。
+  function press(target) {
+    const View = target.ownerDocument.defaultView;
+    for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
+      if (Event) target.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+  }
   // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
   const NEXT_LEVEL_MS = 300;
   // 联想框（#404 51job）聚焦后多半不弹建议，要打了字才有：只等这么久，没有就先打字。
@@ -187,8 +194,10 @@
       : library === 'arco' ? '.arco-select-view-value, .arco-select-view-tag, .arco-cascader-view-value' : '';
     if (library === 'element' && cascade && (info.requireCascadeSignal || !el.readOnly)) {
       const leaf = info.lastChoice;
+      // #301 #417 element-ui 2.15 选中的叶子：is-active，前面多一个勾（el-cascader-node__prefix），没有 aria-checked。只有 is-active 不算。
       const checked = leaf?.isConnected && (leaf.getAttribute('aria-checked') === 'true'
-        || leaf.classList.contains('is-checked') || Boolean(leaf.querySelector('input[type="radio"]:checked, .el-radio.is-checked')));
+        || leaf.classList.contains('is-checked') || Boolean(leaf.querySelector('input[type="radio"]:checked, .el-radio.is-checked'))
+        || (leaf.classList.contains('is-active') && Boolean(leaf.querySelector(':scope > .el-cascader-node__prefix'))));
       if (!checked) return [];
     }
     if (selector) {
@@ -1131,6 +1140,34 @@
       }
     }
   }
+  // #301 #417 只读文本框写不上（智联 Element 的 el-input 配网页自己的选择器）时，收起聚焦它时网页打开的对话框或浮层。
+  // before 是聚焦前看得见的（见 openLayers）：只收之后新冒出来、不装着这个框的一块；冒出几块、拿不准就不动。
+  // 框在对话框、抽屉里时不按 Esc（见 DIALOGS），只在那层里、框旁边按下、松开一次；不在的在框上按 Esc
+  // （Element 的对话框在 window 上听 Esc，只关最上面一层），还开着就在页面空白处按下、松开。关不掉就让它开着。
+  const LAYERS = `${DIALOGS}, ${POPUPS}, [class*="popover" i], [class*="popper" i], [class*="popup" i], [class*="dropdown" i], [class*="picker-panel" i]`;
+  function openLayers(doc, visible) {
+    return doc?.querySelectorAll ? new Set(Array.from(doc.querySelectorAll(LAYERS)).filter(visible)) : null;
+  }
+  async function dismissOpened(ctx, before, h) {
+    const el = ctx.el, doc = el?.ownerDocument;
+    if (!before || !doc || h.stop(ctx)) return;
+    const fresh = Array.from(openLayers(doc, h.visible) || []).filter(node => !before.has(node) && !node.contains(el));
+    const outer = fresh.filter(node => !fresh.some(other => other !== node && other.contains(node)));
+    if (outer.length !== 1) return;
+    const layer = outer[0], gone = () => !layer.isConnected || !h.visible(layer);
+    const dialog = dialogOf(el);
+    if (dialog) {
+      // 浮层就画在框旁边（和框在同一个组件里）时，在装着两者的那一层外面按，组件才算点了外面。
+      let near = el;
+      while (!near.contains(layer) && near.parentElement && dialog.contains(near.parentElement)) near = near.parentElement;
+      const spot = pressSpot(near.contains(layer) ? near : el, dialog);
+      if (spot) press(spot);
+      return;
+    }
+    el.dispatchEvent(new doc.defaultView.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+    const left = await h.waitUntil(ctx, doc.documentElement, gone, Boolean, ESC_LEAVE_MS);
+    if (left.reason === 'verification_timeout' && !gone() && !h.stop(ctx)) press(doc.body);
+  }
   async function run(ctx, raw, h) {
     const state = {}; let outcome;
     // 页面异常也按失败收尾（收起弹层、恢复搜索词）；只把固定的原因码交出去。
@@ -1159,11 +1196,6 @@
         if (info?.library === 'yui' && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) info.el.dispatchEvent(new info.el.ownerDocument.defaultView.FocusEvent('blur'));
         if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
-          const press = target => {
-            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
-              if (Event) target.dispatchEvent(new Event(type, { bubbles: true }));
-            }
-          };
           const dialog = dialogOf(info.root);
           if (dialog) {
             const spot = pressSpot(info.root, dialog);
@@ -1195,5 +1227,6 @@
     return [node, ...node.querySelectorAll('[aria-checked], [class]')].some(el => el.getAttribute('aria-checked') === 'true'
       || String(el.getAttribute('class') || '').split(/\s+/).some(token => CHECKED_TOKEN.test(token)));
   }
-  scope.ResumeProCustomControls = { describe, acceptsFreeText, snapshot, hasExistingValue, readSelection, visiblePopups, optionTarget, isChecked, run, suggest };
+  scope.ResumeProCustomControls = { describe, acceptsFreeText, snapshot, hasExistingValue, readSelection, visiblePopups, optionTarget, isChecked, run, suggest,
+    openLayers, dismissOpened };
 })(typeof self !== 'undefined' ? self : globalThis);

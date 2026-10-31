@@ -353,7 +353,8 @@
       if (type === "radio") {
         const scope = el.form || el.closest("[role='radiogroup'], fieldset") || null;
         const key = el.name ? `name:${el.name}` : null;
-        const groupKey = key || el.closest("[role='radiogroup'], fieldset") || el;
+        // #301 #418 antd 的 Radio.Group 不传 name 时，input 没有 name，组上也没有 role（ant-design-vue 1.x、antd 3～5 都是）：按组容器分。
+        const groupKey = key || el.closest("[role='radiogroup'], fieldset, .ant-radio-group") || el;
         if (!radiosByName.has(groupKey)) radiosByName.set(groupKey, []);
         radiosByName.get(groupKey).push({ el, scope });
         continue;

@@ -165,6 +165,41 @@ test("findSelectOptionIndex: refuses to guess between several containing options
   assert.equal(helpers.findSelectOptionIndex(options(["博士研究生", "博士后"]), "博士"), -1);
 });
 
+// #301 #418 证件类型：「我的信息」里写「居民身份证」「港澳居民来往内地通行证」「台湾居民来往大陆通行证」（profile-fields.js），
+// 网站常写「身份证」「回乡证」「台胞证」，旁边还有「香港居民身份证」「澳门居民身份证」，按包含比会几项都沾边。
+test("findSelectOptionIndex: an ID type picks the one option that is another name for it", () => {
+  const csair = options(["身份证", "护照", "回乡证", "外国人永久居留证", "港澳通行证", "香港居民身份证", "澳门居民身份证", "台湾身份证", "台胞证", "台湾通行证"]);
+  const pick = (list, value) => list[helpers.findSelectOptionIndex(list, value)]?.text;
+  assert.equal(pick(csair, "居民身份证"), "身份证");
+  assert.equal(pick(csair, "港澳居民来往内地通行证"), "回乡证");
+  assert.equal(pick(csair, "台湾居民来往大陆通行证"), "台胞证");
+  // 反过来：资料写简称，网站写全称。
+  const full = options(["居民身份证", "香港居民身份证", "澳门居民身份证", "港澳居民来往内地通行证", "台湾居民来往大陆通行证", "护照"]);
+  assert.equal(pick(full, "身份证"), "居民身份证");
+  assert.equal(pick(full, "二代身份证"), "居民身份证");
+  assert.equal(pick(full, "回乡证"), "港澳居民来往内地通行证");
+  assert.equal(pick(full, "台胞证"), "台湾居民来往大陆通行证");
+  assert.equal(pick(options(["中华人民共和国居民身份证", "香港居民身份证", "护照"]), "大陆居民身份证"), "中华人民共和国居民身份证");
+});
+
+test("findSelectOptionIndex: an ID-type synonym is used only when exactly one option is one", () => {
+  // 两项都是身份证的写法：不猜。
+  assert.equal(helpers.findSelectOptionIndex(options(["中国居民身份证", "大陆居民身份证", "香港居民身份证"]), "居民身份证"), -1);
+  // 「港澳通行证」也可能是内地居民往来港澳通行证，不当成回乡证。
+  assert.equal(helpers.findSelectOptionIndex(options(["港澳通行证", "护照"]), "港澳居民来往内地通行证"), -1);
+  // 禁用的选项不算。
+  assert.equal(helpers.findSelectOptionIndex([{ value: "1", text: "身份证", disabled: true }, { value: "2", text: "香港居民身份证" }, { value: "3", text: "澳门居民身份证" }], "居民身份证"), -1);
+  // 同名的照旧先用。
+  assert.equal(helpers.findSelectOptionIndex(options(["身份证", "居民身份证", "护照"]), "居民身份证"), 1);
+});
+
+test("select validation keeps an ID type that only matches by its other name", () => {
+  const filtered = helpers.filterValidMatches([
+    { fieldId: "idtype", label: "证件类型", inputType: "select", options: ["请选择", "身份证", "护照", "香港居民身份证", "澳门居民身份证"] }
+  ], [{ fieldId: "idtype", value: "居民身份证" }]);
+  assert.deepEqual(filtered, [{ fieldId: "idtype", value: "居民身份证" }]);
+});
+
 test("findSelectOptionIndex: negated options never stand in for the positive one, and back", () => {
   assert.equal(helpers.findSelectOptionIndex(options(["全日制", "非全日制"]), "全日制"), 0);
   assert.equal(helpers.findSelectOptionIndex(options(["全日制", "非全日制"]), "非全日制"), 1);

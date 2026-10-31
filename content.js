@@ -86,6 +86,7 @@
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     format_mismatch: "只能填数字",
+    readonly_picker: "网页自己的选择框",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
@@ -5142,9 +5143,9 @@
       ? { opened: "none" } : null;
   }
 
-  // #399 #405 写入被拒（值没有写上、被页面退回）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
+  // #399 #405 写入被拒（值没有写上、被页面退回，#417 只读的选择框写不上）的文本框，诊断里多带两样：框里剩下的是什么（控件层给的 empty / previous / other），
   // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
-  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted"]);
+  const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted", "readonly_picker"]);
   const textLeftovers = new WeakMap();
   // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
   const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",

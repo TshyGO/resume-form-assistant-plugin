@@ -152,6 +152,17 @@ test('AntD 3 single selection is verified from its selected-value text', async (
   assert.equal(h.api.check(h.target).reason, 'value_reverted');
 });
 
+// #301 #418 南航（ant-design-vue 1.7.8）的证件类型：资料写「居民身份证」，选项里有「身份证」「香港居民身份证」「澳门居民身份证」。
+test('an ID type from the profile selects the site option that is another name for it', async () => {
+  const ids = ['身份证', '护照', '回乡证', '港澳通行证', '香港居民身份证', '澳门居民身份证', '台胞证'];
+  for (const [value, wanted] of [['居民身份证', '身份证'], ['港澳居民来往内地通行证', '回乡证'], ['台湾居民来往大陆通行证', '台胞证']]) {
+    const h = antd3(ids, { label: '证件类型' });
+    const result = await h.api.operate(h.target, value);
+    assert.equal(result.ok, true, `${value}: ${result.reason}`);
+    assert.deepEqual(h.picked, [wanted]);
+  }
+});
+
 test('AntD 3 existing selection is read as the displayed choice', () => {
   const h = antd3(['CET4', 'CET6'], { label: '外语等级', selected: 'CET4' });
   assert.deepEqual(Array.from(h.w.ResumeProCustomControls.readSelection(h.target).texts), ['CET4']);
