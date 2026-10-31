@@ -152,8 +152,8 @@ export function mountInbox(
     status.dataset.tone = message?.tone ?? "info";
   }
 
-  /** 重新读一遍待整理列表。读不出来时返回 false，并且**不**把列表画成空的。 */
-  async function refresh(): Promise<boolean> {
+  /** false 表示读取失败，null 表示已有更新的读取接手；都不覆盖现有内容。 */
+  async function refresh(): Promise<boolean | null> {
     const mode = listMode;
     const revision = ++refreshRevision;
     const countTick = ++countRevision;
@@ -165,12 +165,14 @@ export function mountInbox(
     }, () => {
       if (count && countTick === countRevision) count.textContent = "";
     });
+    let listChanged = true;
     try {
       const next = await (mode === "stored" ? stored : invoke<EvidenceSummary[]>("list_recycled_evidence_cmd"));
-      if (revision !== refreshRevision || mode !== listMode) return false;
+      if (revision !== refreshRevision || mode !== listMode) return null;
+      listChanged = !loaded || JSON.stringify(items) !== JSON.stringify(next);
       items = next;
     } catch (error) {
-      if (revision !== refreshRevision || mode !== listMode) return false;
+      if (revision !== refreshRevision || mode !== listMode) return null;
       say({ tone: "warn", text: `读不到招聘通知：${invokeError(error)}` });
       // 读失败不等于没有通知：已经显示的列表原样留着；从没读成功过就如实说读不出来，
       // 而不是摆出「没有待整理的招聘通知」的空状态。
@@ -182,7 +184,7 @@ export function mountInbox(
       return false;
     }
     loaded = true;
-    renderList();
+    if (listChanged) renderList(); // Foreground checks must not replace focused rows unnecessarily.
     // 邮箱候选由待确认页负责右侧预览；并行刷新待关联列表时不能把它覆盖掉。
     if (previewMode === "pending") return true;
     if (selectedId && !items.some((item) => item.id === selectedId)) {
@@ -557,7 +559,7 @@ export function mountInbox(
           preview.innerHTML = items.length ? emptyPreview : emptyState();
         }
         say({ tone: done.cleanupPending ? "warn" : "success", text: message });
-        if (!await refresh()) say({ tone: "warn", text: `${message}列表暂时无法刷新，请稍后重新读取。` });
+        if (await refresh() === false) say({ tone: "warn", text: `${message}列表暂时无法刷新，请稍后重新读取。` });
         return;
       }
       if (action === "recycle" || action === "restore") {
@@ -664,7 +666,7 @@ export function mountInbox(
         if (listMode === "recycled") await showStored();
       }
       const refreshed = await refresh();
-      if (!refreshed) {
+      if (refreshed === false) {
         say({ tone: "warn", text: `${message.text}列表刷新失败，${stored ? "材料已保存，无需重复导入。" : "内容仍保留，可重试导入。"}` });
       }
       // 只导入了一条新的：直接打开它，省得再去列表里找。

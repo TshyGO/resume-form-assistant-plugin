@@ -150,6 +150,21 @@ test("external refresh updates the badge without replacing a pending-mail previe
   expect(h.preview.getByRole("heading", {name:"没有待确认邮件"})).toBeTruthy();
 });
 
+test("unchanged foreground reads preserve the focused list row and organizer draft", async () => {
+  const h = setup(); await h.inbox.refresh();
+  fireEvent.click(within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/}));
+  fireEvent.click(await h.preview.findByRole("button", {name:"整理与关联"}));
+  const input = el("inbox-reply-class") as HTMLSelectElement;
+  input.value = "interview_invite";
+  const row = within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/});
+  row.focus();
+  await h.inbox.refresh();
+  expect(within(el("inbox-list")).getByRole("button", {name:/功能验证通知 one/})).toBe(row);
+  expect(document.activeElement).toBe(row);
+  expect(el("inbox-reply-class")).toBe(input);
+  expect(input.value).toBe("interview_invite");
+});
+
 test("permanent deletion is only available in recycle bin and cancellation keeps the notification", async () => {
   const h = setup(); await h.inbox.refresh();
   fireEvent.click(within(el("inbox-list")).getByRole("button", {name:/功能验证通知/}));
@@ -209,6 +224,23 @@ test("a successful purge clears the old body even if the subsequent list reload 
   expect(h.preview.queryByText("原正文始终保留")).toBeNull();
   expect(h.preview.queryByRole("button", {name:"恢复通知"})).toBeNull();
   expect(h.rows).toHaveLength(0);
+});
+
+test("a refresh superseded after deletion is not reported as a list read failure", async () => {
+  const h = setup(); fireEvent.click(await openRecycled(h));
+  const dialog = await within(document.body).findByRole("dialog");
+  let release!: (value: unknown) => void;
+  h.handlers.list_recycled_evidence_cmd = () => new Promise(resolve => { release = resolve; });
+  fireEvent.click(within(dialog).getByRole("button", {name:"永久删除"}));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  delete h.handlers.list_recycled_evidence_cmd;
+  expect(await h.inbox.refresh()).toBe(true);
+  release([]);
+  await waitFor(() => expect(h.preview.getByText("回收站为空")).toBeTruthy());
+  // Let the older purge refresh resume after the newer successful read.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(el("inbox-status").textContent).toContain("通知已永久删除");
+  expect(el("inbox-status").textContent).not.toContain("无法刷新");
 });
 
 test.each([true, false])("shared originals and incomplete file cleanup are accurately reported (%s)", async shared => {
