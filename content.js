@@ -52,6 +52,8 @@
   let panelQueriedAt = 0;
   let panelNotifyTimer = null;
   const PANEL_ONLINE_MS = 5000;
+  // 等 AI 多久后给提示（#402，原来是 90 秒）。
+  const WAIT_HINT_SECONDS = 30;
   const textFillFailures = new WeakMap();
   // 给页面自己的校验留一点时间。短到不拖慢整表，长过常见的几十毫秒回滚。
   let textCommitWaitMs = 100;
@@ -145,6 +147,7 @@
       const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
       const status = shadowRoot?.querySelector("#resume-pro-status");
       const cancel = shadowRoot?.querySelector("#resume-pro-cancel-fill");
+      const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
@@ -163,6 +166,8 @@
         openView: state.suggestedView,
         // While 辅助新增 runs, its own 停止 is the one control; the fill's cancel stays hidden.
         canCancel: !repeatActive() && Boolean(cancel && !cancel.hidden && !cancel.disabled),
+        // 等 AI 久了的提示（#402）：网页里的旧侧栏是隐藏的，侧栏自己显示这段文字。
+        waitHint: state.aiBusy && waitHint && !waitHint.hidden ? waitHint.textContent : "",
         // 保存到「我的信息」的候选、勾选依据和结果（#189）；null 表示没有可问的。
         profileOffer: panelProfileSnapshot(),
         // Archiving the fill that just ended (#178): the offer, the application question and
@@ -2404,6 +2409,14 @@
     let phaseStart = totalStart;
     let phase = "scanMs";
     let timer = null;
+    // #402 先填：AI 返回前填上了几项、先填花了多久；AI 请求还没回来时出错或停下，结束时一并取消。
+    let earlyFilled = 0;
+    let earlyFillMs = 0;
+    let earlyFrom = null;
+    let aiPending = false;
+    let aiDoneAt = null;
+    // 等 AI 期间被改过、没有覆盖的字段名；诊断里只记个数。
+    const kept = [];
     let diagnostics = {};
     let fieldCount = 0;
     let filledCount = 0;
@@ -2541,96 +2554,10 @@
       phaseStart = performance.now();
       // 补填新出现字段时发出的 AI 请求（#269）：停止时一并取消，不等它返回。
       let catchUpRequestId = null;
-      if (cancelButton) {
-        cancelButton.hidden = false;
-        cancelButton.disabled = false;
-        cancelButton.onclick = async () => {
-          if (phase === 'fillMs') {
-            writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
-            overlayWatch?.stop(true);
-            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
-            showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
-            return;
-          }
-          if (phase !== "roundTripMs") return;
-          cancelRequested = true;
-          cancelButton.disabled = true;
-          try {
-            const reply = await self.ResumeProAIClient.cancel(requestId);
-            cancelRequested = Boolean(reply?.cancelled);
-            if (waitHint && phase === "roundTripMs") {
-              waitHint.hidden = false;
-              waitHint.textContent = reply?.cancelled ? "正在取消 AI 等待，保留本地匹配结果。" : "请求已结束或无法取消，正在等待结果。";
-            }
-          } catch {
-            cancelRequested = false;
-            if (phase === "roundTripMs") {
-              cancelButton.disabled = false;
-              if (waitHint) {
-                waitHint.hidden = false;
-                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
-              }
-            }
-          }
-        };
-      }
-      const updateProgress = () => {
-        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
-        button.textContent = `AI 匹配中... ${seconds}s`;
-        if (seconds >= 90 && waitHint && !cancelRequested) {
-          waitHint.hidden = false;
-          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。你可以继续等待或手动取消。";
-        }
-      };
-      updateProgress();
-      timer = window.setInterval(updateProgress, 1000);
-      // A stop during the preparation above had no request to cancel yet: send nothing.
-      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
-      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
-      assisted?.onRequest?.(requestId);
-      deep?.onRequest?.(requestId);
-      requested = true;
-      const response = await self.ResumeProAIClient.send({
-        type: "AI_FILL",
-        requestId,
-        formFields: fields,
-        resumeFields,
-        ...(deep?.tier ? { tier: deep.tier, maxCalls: deep.maxCalls } : {})
-      });
-      timing.roundTripMs = performance.now() - phaseStart;
-      phase = null;
-      window.clearInterval(timer);
-      timer = null;
-      if (waitHint) waitHint.hidden = true;
-      diagnostics = response?.diagnostics || {};
-      responded = Boolean(response);
-      // Cancellation may race a successful AI reply. Only the worker's explicitly
-      // cancelled response may retain its documented local matches.
-      if (cancelRequested && diagnostics.errorCode !== 'cancelled') {
-        writeCancelled = true;
-        throw new Error('已取消填写，忽略迟到的 AI 结果。');
-      }
-      matched = Array.isArray(response?.matches) ? response.matches.length : null;
-      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
-      // 深度分析在等 AI 时被停止：worker 会带回本地匹配，但用户已经说了停，一项都不写。
-      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
-
-      if (response?.openView === "settings-ai") {
-        state.suggestedView = "settings-ai";
-        await openManager("settings-ai");
-      }
-      if (!response?.success) {
-        throw new Error(response?.error || "AI 填写失败。");
-      }
-
-      button.textContent = "正在填写网页...";
-      phase = "fillMs";
-      stage = "fill";
-      phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
       const domOrderMap = new Map(fields.map((field, index) => [field.fieldId, index]));
-      const sortedMatches = [...response.matches].sort((a, b) => {
+      const byOrder = (a, b) => {
         const ma = fieldMetaMap.get(a.fieldId);
         const mb = fieldMetaMap.get(b.fieldId);
         if (ma?.cascadeGroup !== undefined && ma.cascadeGroup === mb?.cascadeGroup) {
@@ -2638,26 +2565,8 @@
         }
         // 其余按页面顺序从上往下填：没被识别成联动组的省/市/县也能等上一级先选好。
         return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
-      });
-
+      };
       const approvedValues = new Map();
-      if (!assisted) {
-        for (const match of sortedMatches) {
-          const entry = fieldMap.get(match.fieldId);
-          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
-        }
-        const occupiedCount = [...approvedValues.keys()].filter(hasExistingValue).length;
-        if (occupiedCount && !window.confirm(
-          `本次将重新填写 ${occupiedCount} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？取消将保留网页现有内容，本次不会写入任何字段。AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
-        )) {
-          overwriteDeclined = true;
-          cancelRequested = true;
-          showStatus("已取消填写，网页现有内容未修改。", "error", true);
-          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
-          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
-            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
-        }
-      }
 
       const noteControlFailure = (element, fieldMeta, value, reason, uncertain) => {
         const control = element.kind === 'element' ? element.element : element;
@@ -2742,7 +2651,7 @@
       const failedCascadeGroups = new Set();
       // #269 选了某项后页面才出现的字段（智联选完学历多出专业、院系）：选完等页面安静再扫一次，
       // 新出现的空字段先在本地匹配、当场排进这一轮；本地匹配不上的，这一轮结束后交给 AI 补填，最多补 2 次。
-      const queue = sortedMatches.slice();
+      const queue = [];
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
@@ -2755,8 +2664,12 @@
       const grownMatchedIds = new Set();
       const grownMissed = [];
       let grownWarning = "";
-      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。
-      const aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
+      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。AI 回来后才知道。
+      let aiDown = false;
+      // #402 先填阶段：同一对里还在等 AI 的另一半（Moka 起止时间），和选完后页面带出值、已重新批准的字段。
+      let waitingAi = false;
+      let awaiting = [];
+      const pageFilled = new Set();
       const pickUpNewFields = async (position) => {
         await waitForPageSettle();
         if (!isCurrent()) return;
@@ -2841,10 +2754,277 @@
           if (!grownWarning && typeof reply?.warning === "string") grownWarning = reply.warning;
         }
       };
+
+      // #402 普通一键填写分两步：本地规则能确定的空字段先填，AI 请求同时在后台进行；AI 回来后只补剩下的字段，
+      // 再照旧复核、补填新出现的字段和记账。已经有内容的字段要问过才覆盖：留到 AI 回来，和其余字段一起只问一次。
+      const plain = !assisted && !deep;
+      let early = [];
+      if (plain) {
+        try {
+          const helpers = self.ResumeProAIHelpers;
+          const local = helpers?.localRuleMatches && self.ResumeProProfile
+            ? helpers.localRuleMatches(fields, resumeFields, self.ResumeProProfile) : [];
+          // 还没有选项的原生下拉多半在等上一级选好：不先填。
+          const ready = new Set(local.filter(match => {
+            const entry = fieldMap.get(match.fieldId);
+            return entry && isFieldBindingCurrent(entry) && !hasExistingValue(entry)
+              && !(entry.kind === "element" && entry.element instanceof HTMLSelectElement && !hasRealSelectOptions(entry.element));
+          }).map(match => match.fieldId));
+          // 联动下拉从上往下：上一级没先填，下面几级也不先填。
+          const groups = new Map();
+          for (const field of fields) {
+            if (field.cascadeGroup === undefined) continue;
+            if (!groups.has(field.cascadeGroup)) groups.set(field.cascadeGroup, []);
+            groups.get(field.cascadeGroup).push(field);
+          }
+          for (const members of groups.values()) {
+            members.sort((a, b) => (a.cascadeLevel ?? 0) - (b.cascadeLevel ?? 0));
+            const stop = members.findIndex(field => !ready.has(field.fieldId));
+            if (stop >= 0) members.slice(stop).forEach(field => ready.delete(field.fieldId));
+          }
+          early = local.filter(match => ready.has(match.fieldId)).sort(byOrder);
+        } catch {
+          early = [];
+        }
+        // 网页值以点击这一刻为准：等 AI 期间被改过的字段（用户自己填的，或页面带出来的）不覆盖。
+        for (const field of fields) {
+          const entry = fieldMap.get(field.fieldId);
+          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
+        }
+        const earlyIds = new Set(early.map(match => match.fieldId));
+        if (early.length) awaiting = fields.filter(field => !earlyIds.has(field.fieldId)).map(field => fieldMap.get(field.fieldId)).filter(Boolean);
+      }
+      // 先填期间在写网页；AI 回来时还是插件写的值的先填字段。
+      let writing = false;
+      let intactEarly = [];
+      // 先填时选项还没出来、没填上的下拉（字典还在加载，或要等上面 AI 的题目先选好）：AI 回来后再试一次。
+      // 原来所有字段都等 AI 回来才填，那时选项多半已经有了。被页面拒收、值被改回的不在这里。
+      const OPTIONS_LATE = new Set(["options_not_rendered", "options_timeout", "cascade_timeout"]);
+      const earlyRetry = [];
+      if (cancelButton) {
+        cancelButton.hidden = false;
+        cancelButton.disabled = false;
+        cancelButton.onclick = async () => {
+          if (phase === 'fillMs') {
+            writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            overlayWatch?.stop(true);
+            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
+            showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
+            return;
+          }
+          // 先填（#402）还在写时也一样：只取消 AI 等待，本地匹配照常写完，和按钮上写的一致。
+          if (phase !== "roundTripMs") return;
+          cancelRequested = true;
+          cancelButton.disabled = true;
+          try {
+            const reply = await self.ResumeProAIClient.cancel(requestId);
+            cancelRequested = Boolean(reply?.cancelled);
+            if (waitHint && phase === "roundTripMs") {
+              waitHint.hidden = false;
+              waitHint.textContent = !reply?.cancelled ? "请求已结束或无法取消，正在等待结果。"
+                : earlyFilled ? "正在取消 AI 等待，已填的会保留。" : "正在取消 AI 等待，保留本地匹配结果。";
+            }
+          } catch {
+            cancelRequested = false;
+            if (phase === "roundTripMs") {
+              cancelButton.disabled = false;
+              if (waitHint) {
+                waitHint.hidden = false;
+                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
+              }
+            }
+          }
+        };
+      }
+      const updateProgress = () => {
+        if (writing) return;
+        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
+        button.textContent = earlyFilled ? `已先填 ${earlyFilled} 项，AI 匹配中... ${seconds}s` : `AI 匹配中... ${seconds}s`;
+        // #402 等到 30 秒就说：可以接着等，也可以取消，已经填上的不受影响。
+        if (seconds >= WAIT_HINT_SECONDS && waitHint && !cancelRequested) {
+          waitHint.hidden = false;
+          waitHint.textContent = earlyFilled
+            ? `已经先填了 ${earlyFilled} 项，剩下的还在等 AI。可以接着等，也可以点取消，已填的会保留。`
+            : "AI 还没返回，可以接着等，也可以点取消。";
+        }
+      };
+      writing = early.length > 0;
+      if (writing) button.textContent = "正在填写网页...";
+      updateProgress();
+      timer = window.setInterval(updateProgress, 1000);
+      // A stop during the preparation above had no request to cancel yet: send nothing.
+      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
+      assisted?.onRequest?.(requestId);
+      deep?.onRequest?.(requestId);
+      requested = true;
+      const pending = self.ResumeProAIClient.send({
+        type: "AI_FILL",
+        requestId,
+        formFields: fields,
+        resumeFields,
+        ...(deep?.tier ? { tier: deep.tier, maxCalls: deep.maxCalls } : {})
+      });
+      aiPending = true;
+      // 先填期间请求出错不能成为未处理的拒绝；结果在 settleAi 里照旧处理。
+      // 记下 AI 回来的时刻：比先填先回来时，匹配往返不算等先填写完的时间。
+      const aiSettled = () => { aiPending = false; aiDoneAt = performance.now(); };
+      pending.then(aiSettled, aiSettled);
+      let response = null;
+      // AI 回来以后：照旧检查结果，再把先填以外的匹配排进 queue。没有先填时拒绝覆盖，返回和末尾同形的结果。
+      const settleAi = async () => {
+        const earlyRan = waitingAi;
+        if (waitingAi) {
+          earlyFillMs = performance.now() - earlyFrom;
+          earlyFrom = null;
+          waitingAi = false;
+          writing = false;
+          stage = "match";
+          earlyFilled = filledCount;
+          updateProgress();
+        }
+        response = await pending;
+        timing.roundTripMs = (aiDoneAt ?? performance.now()) - phaseStart;
+        phase = null;
+        window.clearInterval(timer);
+        timer = null;
+        if (waitHint) waitHint.hidden = true;
+        diagnostics = response?.diagnostics || {};
+        responded = Boolean(response);
+        aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
+        // Cancellation may race a successful AI reply. Only the worker's explicitly
+        // cancelled response may retain its documented local matches.
+        if (cancelRequested && diagnostics.errorCode !== 'cancelled') {
+          writeCancelled = true;
+          throw new Error('已取消填写，忽略迟到的 AI 结果。');
+        }
+        matched = Array.isArray(response?.matches) ? response.matches.length : null;
+        if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+        // 深度分析在等 AI 时被停止：worker 会带回本地匹配，但用户已经说了停，一项都不写。
+        if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
+
+        if (response?.openView === "settings-ai") {
+          state.suggestedView = "settings-ai";
+          await openManager("settings-ai");
+        }
+        if (!response?.success) {
+          throw new Error(response?.error || "AI 填写失败。");
+        }
+
+        button.textContent = "正在填写网页...";
+        phase = "fillMs";
+        stage = "fill";
+        phaseStart = performance.now();
+
+        // 先填过的不再填。先填时选项还没出来的，网页上还是点击时的样子，就和 AI 的字段一起按页面顺序再试这一次。
+        const done = new Set(early.map(match => match.fieldId));
+        const retry = earlyRetry.splice(0).filter(item => {
+          const entry = fieldMap.get(item.match.fieldId);
+          const current = entry && (isFieldBindingCurrent(entry) ? entry : rebindFieldEntry(entry));
+          return Boolean(current) && fillValueSnapshot(current) === approvedValues.get(entry);
+        });
+        const sortedMatches = [...response.matches.filter(match => !done.has(match.fieldId)), ...retry.map(item => item.match)].sort(byOrder);
+        if (assisted) {
+          queue.push(...sortedMatches);
+          return null;
+        }
+        // 先填过、这时还是插件写的值的字段：AI 这一步选完上面的题目后，页面可能把它清回原样（证件类型→证件号码）。
+        if (earlyRan) intactEarly = verifiedControls.filter(item => done.has(item.fieldId)
+          && isFieldBindingCurrent(item.element) && fillValueSnapshot(item.element) === item.after);
+        const later = [];
+        const occupied = new Set();
+        const keep = (match) => {
+          const meta = fieldMetaMap.get(match.fieldId);
+          kept.push(meta?.label || meta?.placeholder || meta?.name || "未命名字段");
+        };
+        for (const match of sortedMatches) {
+          let entry = fieldMap.get(match.fieldId);
+          if (entry && !plain) approvedValues.set(entry, fillValueSnapshot(entry));
+          else if (entry && !isFieldBindingCurrent(entry)) {
+            // 先填的选择让页面重画了后面的字段（#269 智联）：找回的新字段和点击时一样，就按新字段判断有没有内容；
+            // 新字段的内容变了（等 AI 时用户在新字段里填了，或页面带出的值），和没重画的字段一样保留不覆盖。
+            // 找不回或读不出内容的，交给下面循环里原有的重绑和写入前复查。
+            const fresh = rebindFieldEntry(entry);
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            if (now === null) {
+              later.push(match);
+              continue;
+            }
+            if (now !== approvedValues.get(entry)) {
+              keep(match);
+              continue;
+            }
+            approvedValues.set(fresh, approvedValues.get(entry));
+            if (pageFilled.has(entry)) pageFilled.add(fresh);
+            fieldMap.set(match.fieldId, fresh);
+            entry = fresh;
+          } else if (entry && fillValueSnapshot(entry) !== approvedValues.get(entry)) {
+            keep(match);
+            continue;
+          }
+          // 先填时页面跟着带出值的另一半（Moka 的月份）不算已有内容。
+          if (entry && !pageFilled.has(entry) && hasExistingValue(entry)) occupied.add(entry);
+          later.push(match);
+        }
+        if (occupied.size && !window.confirm(
+          `本次将重新填写 ${occupied.size} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？${earlyRan
+            ? "取消会保留这些字段的现有内容，剩下的字段也不再填写，已经先填的不受影响。"
+            : "取消将保留网页现有内容，本次不会写入任何字段。"}AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
+        )) {
+          overwriteDeclined = true;
+          cancelRequested = true;
+          if (earlyRan) {
+            // 先填的已经写上了：剩下的不再填写，先填的照常同步，结果按部分完成算。
+            await finalSyncFillSession(session);
+            throw new Error(`已取消后续填写，已有内容的字段没有改动。此前已填写 ${filledCount} 项，请核对网页。`);
+          }
+          showStatus("已取消填写，网页现有内容未修改。", "error", true);
+          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
+          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
+            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+        }
+        // 要再试的：先填那次记下的没填上撤掉，以这次的结果为准。
+        for (const item of retry) {
+          const control = unfilledControls.indexOf(item.control);
+          if (control >= 0) unfilledControls.splice(control, 1);
+          const label = unfilledLabels.lastIndexOf(item.label);
+          if (label >= 0) unfilledLabels.splice(label, 1);
+        }
+        queue.push(...later);
+        return null;
+      };
+      if (early.length) {
+        queue.push(...early);
+        waitingAi = true;
+        stage = "fill";
+        earlyFrom = performance.now();
+      } else {
+        const declined = await settleAi();
+        if (declined) return declined;
+      }
       for (let position = 0; ; position++) {
+        // 先填的本地匹配填完了（#402）：等 AI 回来，把剩下的字段排进来接着填。新出现字段的补填还在这之后。
+        if (position >= queue.length && waitingAi) await settleAi();
+        // AI 这一步的字段也填完了：先填过的字段被页面清回点击时的样子（上面的选择变了，页面清空下面的），
+        // 按原值再填一次，和原来从上往下填的结果一样。只看这一遍。
+        if (position >= queue.length && intactEarly.length && isCurrent()) {
+          for (const item of intactEarly.splice(0)) {
+            const fresh = isFieldBindingCurrent(item.element) ? item.element : rebindFieldEntry(item.element);
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            const index = verifiedControls.indexOf(item);
+            if (now === null || now !== approvedValues.get(item.element) || now === item.after || index < 0) continue;
+            // 换成这次重填的记账：先前那次不再算填上，也不再复核。
+            verifiedControls.splice(index, 1);
+            filledCount -= 1;
+            if (item.isNew) supplemented -= 1;
+            if (item.element.kind === "element" && dayDefaultedControls.has(item.element.element)) dayDefaulted -= 1;
+            queue.push(early.find(match => match.fieldId === item.fieldId));
+          }
+        }
         if (position >= queue.length) {
           // 停下来的、两轮补填用完的、首轮 AI 已经失败的：排队的新字段不再发出，循环后统一收尾。
-          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown) break;
+          // 用户取消了 AI 等待（#402）：先填时选出来的新字段也不再发 AI，请用户自己补。
+          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown || diagnostics.errorCode === "cancelled") break;
           catchUpRounds += 1;
           const batch = pendingNew.splice(0);
           button.textContent = "正在补填新出现的字段...";
@@ -2932,8 +3112,10 @@
         const choice = entry => CHOICE_CONTROL_KINDS.has(entry.kind === "radio" ? "radio" : entry.controlKind);
         const pair = element.binding?.item?.parentElement;
         const inPair = entry => { const node = entry.kind === "radio" ? entry.elements?.[0] : entry.element; return Boolean(node) && pair.contains(node); };
+        // 先填阶段（#402）另一半可能还在等 AI，不在 queue 里。
         const partner = !assisted && !deep && pair && choice(element) && [...new Set(fieldMap.values())].filter(inPair).length === 2
-          ? queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)).find(other => other && other !== element && choice(other)
+          ? [...queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)), ...(waitingAi ? awaiting : [])]
+            .find(other => other && other !== element && choice(other)
             && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
           : null;
         const partnerBefore = partner ? fillValueSnapshot(partner) : null;
@@ -2985,7 +3167,8 @@
           filledCount += 1;
           if (newFieldIds.has(match.fieldId)) supplemented += 1;
           if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId) });
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId),
+            fieldId: match.fieldId });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
@@ -2998,9 +3181,19 @@
             await overlayWatches.get(element.element)?.settled;
           }
           // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
-          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+          const reason = textFillFailureCode(element);
+          if (!assisted && reason === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
-          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          } else {
+            const labels = unfilledLabels.length;
+            const controls = unfilledControls.length;
+            noteControlFailure(element, fieldMeta, match.value, reason);
+            // #402 先填时选项还没出来：照常记下没填上，AI 回来后再试一次（见 settleAi）。联动组的下一级会被挡住，不算。
+            if (waitingAi && OPTIONS_LATE.has(reason) && fieldMeta?.cascadeGroup === undefined && early.includes(match)
+              && unfilledLabels.length > labels) {
+              earlyRetry.push({ match, label: unfilledLabels[labels], control: unfilledControls[controls] });
+            }
+          }
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -3016,7 +3209,10 @@
         if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
           await pickUpNewFields(position);
           const partnerNow = partner ? fillValueSnapshot(partner) : null;
-          if (partnerNow !== null && partnerNow !== partnerBefore) approvedValues.set(partner, partnerNow);
+          if (partnerNow !== null && partnerNow !== partnerBefore) {
+            approvedValues.set(partner, partnerNow);
+            if (waitingAi) pageFilled.add(partner);
+          }
         }
       }
       // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。
@@ -3037,14 +3233,15 @@
         const entry = fieldMap.get(field.fieldId);
         return isFieldBindingCurrent(entry) || Boolean(rebindFieldEntry(entry));
       });
-      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length ? "partial" : "success";
+      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length || kept.length ? "partial" : "success";
       const supplementNote = (supplemented ? `（其中新出现的字段补填 ${supplemented} 项）` : "")
         + (dayDefaulted ? `（${dayDefaulted} 项日期资料里只有年月，已按 1 日填写）` : "");
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
         + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '')
         + (grownLeft.length ? `新出现的 ${grownLeft.length} 项没有补填：${summarizeLabels(grownLeft.map(field => field.label))}，请手动补上。`
-          + (grownWarning !== response.warning ? grownWarning : '') : '');
+          + (grownWarning !== response.warning ? grownWarning : '') : '')
+        + (kept.length ? `等 AI 时有改动的 ${kept.length} 项没有覆盖：${summarizeLabels(kept)}，请核对。` : '');
       const emptyHint = viewModeHint();
       const recipeLead = !deep && recipeUse?.status === "hit" ? "已按本站配方定位字段。" : "";
       const recipeTail = !deep && recipeUse?.status === "stale" ? "本站配方可能已过期，可以重新深度分析。" : "";
@@ -3091,10 +3288,15 @@
         if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
     } catch (error) {
+      // 先填（#402）已经写上了几项、AI 这一步才出错：先填的文字照常做最后一次同步，和拒绝覆盖时一样。
+      // 这不是停止，用户没让停下写入。
+      if (stage === "match" && filledCount > 0) await finalSyncFillSession(session);
       // Interrupted fills still get a read-only final count; never replay focus,
       // write, or retry after a stop/overwrite refusal.
       recheckVerifiedControls();
-      if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
+      // 先填已经写上了几项：也是部分完成，并说清网页上已经填了几项。
+      const filledEarly = stage === "match" && filledCount > 0;
+      if (stage === "fill" || filledEarly) outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       if (!scanDone) {
         // #408 扫描还没做完就出错，或控件一个都没读出来（「没找到输入框」在扫描完成之后才报）：上报错误类型和
@@ -3106,6 +3308,7 @@
         hinted = true;
       } else {
         failure = error.message || "AI 填写失败。";
+        if (filledEarly) failure += `已先填写 ${filledCount} 项，请核对网页。`;
       }
       if (!deep && recipeUse?.status === "stale") failure += "本站配方可能已过期，可以重新深度分析。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
@@ -3122,7 +3325,16 @@
       }
       if (waitHint) waitHint.hidden = true;
       if (timer !== null) window.clearInterval(timer);
-      if (phase) timing[phase] = performance.now() - phaseStart;
+      // 先填时出错或被停下（#402）：后台还在等的 AI 请求一并取消，不让它白等到超时。
+      if (aiPending) {
+        aiPending = false;
+        try { Promise.resolve(self.ResumeProAIClient.cancel(requestId)).catch(() => {}); } catch { /* the request ends on its own */ }
+      }
+      // 填写耗时 = 先填的时间 + AI 回来后填写的时间；等 AI 的时间算在匹配里。
+      if (earlyFrom !== null) earlyFillMs = performance.now() - earlyFrom;
+      if (phase) timing[phase] = (phase === "roundTripMs" && aiDoneAt !== null ? aiDoneAt : performance.now()) - phaseStart
+        + (phase === "fillMs" ? earlyFillMs : 0);
+      if (timing.fillMs === null && earlyFillMs) timing.fillMs = earlyFillMs;
       const totalMs = performance.now() - totalStart;
       // #408 扫描出错时补跑页面探测和输入框计数，报告里照样有页面结构。没扫完，谈不上并入同一控件。
       if (!scanDone && !probe) {
@@ -3148,7 +3360,7 @@
       const summaryInput = { ...timing, totalMs,
         fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
-        entry, pageFocused, genericCustom, genericLocked, scanFault,
+        entry, pageFocused, genericCustom, genericLocked, scanFault, earlyFilled, keptCount: kept.length,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -3272,8 +3484,9 @@
     })();
     const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
       popup_internal: "下拉内部输入", grouped: "并入同一控件", page_chrome: "页头导航", site_search: "站内搜索",
-      outside_form: "表单外", no_label: "对不上题目", scan_error: "读取出错", out_of_scope: "不在新增范围", secret: "疑似密码",
-      no_resume_mapping: "无对应资料", ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+      outside_form: "表单外", no_label: "对不上题目", scan_error: "读取出错", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
+      ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", changed_while_waiting: "等 AI 时有改动",
+      not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
     const pageType = result.pageType
       ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
         url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`
@@ -3304,6 +3517,8 @@
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
       `API（含响应读取）：${called === true ? seconds(d.apiMs) : called === false ? "未调用" : "未取得"}`,
       `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
+      // #402 AI 返回前先填上的项数；只在本机显示。
+      ...(Number.isInteger(result.earlyFilled) && result.earlyFilled > 0 ? [`AI 返回前先填：${result.earlyFilled} 项`] : []),
       ...(result.deep ? formatDeepDiagnostics(result.deep) : []),
       ...(result.recipe ? [formatRecipeDiagnostics(result.recipe, d)] : []),
       ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
